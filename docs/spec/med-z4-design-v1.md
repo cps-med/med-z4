@@ -1,10 +1,10 @@
 # med-z4 (Simple EHR) – Design Specification
 
-**Document Version:** v1.0
-**Date:** January 22, 2026
-**Repository:** `med-z4`
-**Status:** Final Design - Ready for Implementation
-**Author:** Claude Code + Chuck Sylvester
+**Document Version:** v1.0  
+**Date:** January 22, 2026  
+**Repository:** `med-z4`  
+**Status:** Final Design - Ready for Implementation  
+**Author:** Chuck Sylvester  
 
 ---
 
@@ -83,7 +83,7 @@ This design specification follows a **production-ready, learning-focused approac
 - Session validation prevents unauthorized access
 
 **Phase 6-8 (Clinical Data Management):**
-- User can create new patients with unique ICN identifiers (999 series)
+- User can create new patients with unique ICN identifiers (999 series)  
 - User can add vitals, allergies, and clinical notes for any patient
 - Data created in med-z4 immediately appears in med-z1 UI
 - Data integrity constraints enforced (required fields, data types, foreign keys)
@@ -97,65 +97,65 @@ This design specification follows a **production-ready, learning-focused approac
 The med-z4 application operates alongside med-z1 as a peer CCOW participant, sharing database resources but maintaining strict application-level isolation.
 
 ```text
-                         ┌──────────────────────────────────┐
-                         │      Clinician (User)            │
-                         └─────────────┬────────────────────┘
+                       ┌──────────────────────────────────┐
+                       │        Clinician (User)          │
+                       └───────────────┬──────────────────┘
                                        │
                     ┌──────────────────┴───────────────────┐
                     │                                      │
             Browser Tab A                          Browser Tab B
-         (localhost:8000)                       (localhost:8005)
+          (localhost:8000)                       (localhost:8005)
                     │                                      │
-      ┌─────────────▼─────────────┐         ┌────────────▼────────────┐
-      │     med-z1 App             │         │    med-z4 App           │
-      │  (Longitudinal Viewer)     │         │  (Simple EHR)           │
-      │                            │         │                         │
-      │  - Blue/Slate Theme        │         │  - Teal/Emerald Theme   │
-      │  - Read-Only Clinical Data │         │  - CRUD Clinical Data   │
-      │  - Dashboard Widgets       │         │  - Patient Roster       │
-      │  - Port 8000               │         │  - Port 8005            │
-      └─────────────┬──────────────┘         └────────────┬────────────┘
+      ┌─────────────▼──────────────┐         ┌─────────────▼──────────────┐
+      │        med-z1 App          │         │        med-z4 App          │
+      │   (Longitudinal Viewer)    │         │       (Simple EHR)         │
+      │                            │         │                            │
+      │  - Blue/Slate Theme        │         │  - Teal/Emerald Theme      │
+      │  - Read-Only Clinical Data │         │  - CRUD Clinical Data      │
+      │  - Dashboard Widgets       │         │  - Patient Roster          │
+      │  - Port 8000               │         │  - Port 8005               │
+      └─────────────┬──────────────┘         └─────────────┬──────────────┘
                     │                                      │
-                    │    ┌─────────────────────────┐      │
-                    └────►   CCOW Context Vault    ◄──────┘
-                         │   (Port 8001)           │
-                         │                         │
-                         │  Multi-User Context Mgmt│
-                         │  Session Validation     │
-                         └────────────┬────────────┘
-                                      │
-                                      │ SQL Queries
-                                      │ (auth.sessions validation)
-                                      │ (clinical data read/write)
-                                      │
-                    ┌─────────────────▼──────────────────────┐
-                    │    PostgreSQL Database (medz1)         │
-                    │                                        │
-                    │  ┌──────────────────────────────────┐  │
-                    │  │  Schema: auth                    │  │
-                    │  │  - users (shared)                │  │
-                    │  │  - sessions (shared)             │  │
-                    │  │  - audit_logs (shared)           │  │
-                    │  └──────────────────────────────────┘  │
-                    │                                        │
-                    │  ┌──────────────────────────────────┐  │
-                    │  │  Schema: clinical                │  │
-                    │  │  - patient_demographics          │  │
-                    │  │  - patient_vitals                │  │
-                    │  │  - patient_allergies             │  │
-                    │  │  - patient_clinical_notes        │  │
-                    │  │  - patient_medications_*         │  │
-                    │  │  - patient_encounters            │  │
-                    │  │  - patient_labs                  │  │
-                    │  │  - patient_immunizations         │  │
-                    │  │  (12 clinical tables total)      │  │
-                    │  └──────────────────────────────────┘  │
-                    │                                        │
-                    │  ┌──────────────────────────────────┐  │
-                    │  │  Schema: reference               │  │
-                    │  │  - vaccine (CVX codes)           │  │
-                    │  └──────────────────────────────────┘  │
-                    └────────────────────────────────────────┘
+                    │     ┌─────────────────────────┐      │
+                    └─────►   CCOW Context Vault    ◄──────┘
+                          │     (Port 8001)         │
+                          │                         │
+                          │ Multi-User Context Mgmt │
+                          │   Session Validation    │
+                          └────────────┬────────────┘
+                                       │
+                                       │ SQL Queries
+                                       │ (auth.sessions validation)
+                                       │ (clinical data read/write)
+                                       │
+                  ┌────────────────────▼──────────────────────┐
+                  │       PostgreSQL Database (medz1)         │
+                  │                                           │
+                  │   ┌───────────────────────────────────┐   │
+                  │   │  Schema: auth                     │   │
+                  │   │  - users (shared)                 │   │
+                  │   │  - sessions (shared)              │   │
+                  │   │  - audit_logs (shared)            │   │
+                  │   └───────────────────────────────────┘   │
+                  │                                           │
+                  │  ┌────────────────────────────────────┐   │
+                  │  │  Schema: clinical                  │   │
+                  │  │  - patient_demographics            │   │
+                  │  │  - patient_vitals                  │   │
+                  │  │  - patient_allergies               │   │
+                  │  │  - patient_clinical_notes          │   │
+                  │  │  - patient_medications_*           │   │
+                  │  │  - patient_encounters              │   │
+                  │  │  - patient_labs                    │   │
+                  │  │  - patient_immunizations           │   │
+                  │  │  (12 clinical tables total)        │   │
+                  │  └────────────────────────────────────┘   │
+                  │                                           │
+                  │  ┌────────────────────────────────────┐   │
+                  │  │  Schema: reference                 │   │
+                  │  │  - vaccine (CVX codes)             │   │
+                  │  └────────────────────────────────────┘   │
+                  └───────────────────────────────────────────┘
 ```
 
 ### 2.2 Integration Points
@@ -216,61 +216,65 @@ med-z4 follows a **flat, simple structure** optimized for learning and rapid dev
 
 ```text
 med-z4/
-├── .env                      # Environment configuration (DB credentials, secrets)
-├── .gitignore                # Git ignore patterns (Python, IDE, secrets)
-├── README.md                 # Quick start guide and development instructions
-├── requirements.txt          # Python dependencies with pinned versions
-├── config.py                 # Centralized configuration loader (reads .env)
-├── database.py               # SQLAlchemy database engine and session management
-├── main.py                   # FastAPI application entry point
+├── .env                                # Environment configuration (DB credentials, secrets)
+├── .gitignore                          # Git ignore patterns (Python, IDE, secrets)
+├── README.md                           # Quick start guide and development instructions
+├── requirements.txt                    # Python dependencies with pinned versions
+├── config.py                           # Centralized configuration loader (reads .env)
+├── database.py                         # SQLAlchemy database engine and session management
+├── main.py                             # FastAPI application entry point
 │
-├── app/                      # Application code (models, routes, services)
+├── docs/                               # Application documentation
+│   ├── guide/                          # Developer setup and other guides
+│   └── spec/                           # Design specifications
+│
+├── app/                                # Application code (models, routes, services)
 │   ├── __init__.py
 │   │
-│   ├── models/               # Database models (SQLAlchemy/Pydantic)
+│   ├── models/                         # Database models (SQLAlchemy/Pydantic)
 │   │   ├── __init__.py
-│   │   ├── auth.py           # User, Session models (matches med-z1 auth schema)
-│   │   └── clinical.py       # Clinical models (Patient, Vital, Allergy, Note)
+│   │   ├── auth.py                     # User, Session models (matches med-z1 auth schema)
+│   │   └── clinical.py                 # Clinical models (Patient, Vital, Allergy, Note)
 │   │
-│   ├── routes/               # FastAPI route handlers (endpoints)
+│   ├── routes/                         # FastAPI route handlers (endpoints)
 │   │   ├── __init__.py
-│   │   ├── auth.py           # Login, logout, session management
-│   │   ├── dashboard.py      # Patient roster, dashboard
-│   │   ├── context.py        # CCOW context operations (get/set/clear)
-│   │   └── crud.py           # Patient/clinical data CRUD operations (Phase 6+)
+│   │   ├── auth.py                     # Login, logout, session management
+│   │   ├── dashboard.py                # Patient roster, dashboard
+│   │   ├── context.py                  # CCOW context operations (get/set/clear)
+│   │   └── crud.py                     # Patient/clinical data CRUD operations (Phase 6+)
 │   │
-│   ├── services/             # Business logic layer
+│   ├── services/                       # Business logic layer
 │   │   ├── __init__.py
-│   │   ├── auth_service.py   # Password verification, session creation
-│   │   ├── ccow_client.py    # CCOW Vault HTTP client
-│   │   └── patient_service.py # Patient data operations (Phase 6+)
+│   │   ├── auth_service.py             # Password verification, session creation
+│   │   ├── ccow_client.py              # CCOW Vault HTTP client
+│   │   └── patient_service.py          # Patient data operations (Phase 6+)
 │   │
-│   └── middleware/           # Custom middleware (if needed)
+│   └── middleware/                     # Custom middleware (if needed)
 │       └── __init__.py
 │
-├── templates/                # Jinja2 HTML templates
-│   ├── base.html             # Base layout with Teal theme
-│   ├── login.html            # Login form with password input
-│   ├── dashboard.html        # Patient roster table
-│   ├── patient_create.html   # New patient form (Phase 6+)
-│   ├── patient_detail.html   # Patient detail page with tabs (Phase 6+)
+├── templates/                          # Jinja2 HTML templates
+│   ├── base.html                       # Base layout with Teal theme
+│   ├── login.html                      # Login form with password input
+│   ├── dashboard.html                  # Patient roster table
+│   ├── patient_create.html             # New patient form (Phase 6+)
+│   ├── patient_detail.html             # Patient detail page with tabs (Phase 6+)
 │   │
-│   └── partials/             # HTMX partial templates (fragments)
-│       ├── patient_row.html      # Single patient table row
+│   └── partials/                       # HTMX partial templates (fragments)
+│       ├── patient_row.html            # Single patient table row
 │       ├── active_patient_banner.html  # Top banner with active patient
 │       ├── ccow_debug_panel.html       # CCOW status widget
-│       └── forms/                # Reusable form components (Phase 6+)
+│       └── forms/                      # Reusable form components (Phase 6+)
 │           ├── vital_form.html
 │           ├── allergy_form.html
 │           └── note_form.html
 │
-└── static/                   # Static assets (CSS, JS, images)
+└── static/                             # Static assets (CSS, JS, images)
     ├── css/
-    │   └── style.css         # Custom CSS with Teal theme
+    │   └── style.css                   # Custom CSS with Teal theme
     ├── js/
-    │   └── htmx.min.js       # HTMX library (1.9.x)
+    │   └── htmx.min.js                 # HTMX library (1.9.x)
     └── images/
-        └── logo-teal.png     # med-z4 logo
+        └── logo-teal.png               # med-z4 logo, favicon, and other images
 ```
 
 **Learning Note: Directory Structure Rationale**
@@ -2133,10 +2137,10 @@ The CCOW Vault uses **cookie-name-agnostic session validation**:
 4. **First valid session wins** (order: `session_id`, then `med_z4_session_id`, then other cookies)
 
 **Why This Works:**
-- ✅ med-z1 sends cookie: `session_id=<uuid-1>`
-- ✅ med-z4 sends cookie: `med_z4_session_id=<uuid-2>`
-- ✅ Vault validates both by checking UUID against `auth.sessions`
-- ✅ Separate cookie names prevent session collision
+- med-z1 sends cookie: `session_id=<uuid-1>`
+- med-z4 sends cookie: `med_z4_session_id=<uuid-2>`
+- Vault validates both by checking UUID against `auth.sessions`
+- Separate cookie names prevent session collision
 
 **Developer Implementation Guidance:**
 
@@ -2178,10 +2182,10 @@ class CCOWClient:
 5. med-z1: Active patient should update to ICN100001
 
 **Contract Summary:**
-- ✅ **Cookie Name:** Applications can use ANY cookie name (med-z4 uses `med_z4_session_id`)
-- ✅ **Cookie Value:** Must be a valid UUID that exists in `auth.sessions` table
-- ✅ **Vault Behavior:** Validates UUID value against database, ignores cookie name
-- ✅ **Multi-User Support:** Different users in med-z1 and med-z4 can set context independently
+- **Cookie Name:** Applications can use ANY cookie name (med-z4 uses `med_z4_session_id`)
+- **Cookie Value:** Must be a valid UUID that exists in `auth.sessions` table
+- **Vault Behavior:** Validates UUID value against database, ignores cookie name
+- **Multi-User Support:** Different users in med-z1 and med-z4 can set context independently
 
 ---
 
@@ -3416,28 +3420,28 @@ To ensure compatibility with ETL expectations and downstream queries, med-z4 mus
 **Patient Demographics:**
 ```python
 PatientDemographics(
-    patient_key=icn,          # 999V###### format
-    icn=icn,                  # Same as patient_key (for now)
+    patient_key=icn,                 # 999V###### format
+    icn=icn,                         # Same as patient_key (for now)
     name_display=f"{last_name}, {first_name}",
     first_name=first_name,
     last_name=last_name,
     date_of_birth=date_of_birth,
     gender=gender,
-    source_system="med-z4",   # ✅ REQUIRED
-    last_updated=datetime.utcnow()  # ✅ REQUIRED
+    source_system="med-z4",          # REQUIRED
+    last_updated=datetime.utcnow()   # REQUIRED
 )
 ```
 
 **Clinical Data (Vitals, Allergies, Notes):**
 ```python
 PatientVital(
-    patient_key=patient_key,   # FK to patient_demographics
+    patient_key=patient_key,         # FK to patient_demographics
     vital_date=vital_datetime,
     systolic=systolic,
     diastolic=diastolic,
     # ... other vital fields
-    source_system="med-z4",    # ✅ REQUIRED
-    last_updated=datetime.utcnow()  # ✅ REQUIRED
+    source_system="med-z4",          # REQUIRED
+    last_updated=datetime.utcnow()   # REQUIRED
 )
 ```
 
@@ -3498,7 +3502,7 @@ if result.rowcount == 0:
 
 ## 10. Implementation Roadmap
 
-**📚 UI/UX Implementation Guide:** For detailed wireframes, complete HTML/CSS code, and step-by-step UI implementation instructions, see the **Implementation Mapping Guide** in `docs/spec/med-z4-roadmap-ui-mapping.md`. This guide provides:
+**UI/UX Implementation Guide:** For detailed wireframes, complete HTML/CSS code, and step-by-step UI implementation instructions, see the **Implementation Mapping Guide** in `docs/spec/med-z4-roadmap-ui-mapping.md`. This guide provides:
 - Phase-by-phase mapping to Section 15 (UI/UX Design)
 - Complete code snippets for all routes and templates
 - Troubleshooting guidance for common UI issues
@@ -4152,13 +4156,13 @@ async def add_security_headers(request: Request, call_next):
 
 These 7 updates address all peer review feedback:
 
-1. ✅ **DB Access Model** - Resolves read-only vs CRUD contradiction
-2. ✅ **CCOW Cookie Contract** - Clarifies session validation mechanism
-3. ✅ **Routes Contract Table** - Complete endpoint reference
-4. ✅ **Patient Identity** - Normalizes patient_key vs icn usage
-5. ✅ **Data Ownership** - Prevents ETL conflicts with 999-series ICNs
-6. ✅ **Audit Logging** - Extends to clinical data access
-7. ✅ **Security Hardening** - Production checklist (CSRF, rate limiting, TLS)
+1. **DB Access Model** - Resolves read-only vs CRUD contradiction
+2. **CCOW Cookie Contract** - Clarifies session validation mechanism
+3. **Routes Contract Table** - Complete endpoint reference
+4. **Patient Identity** - Normalizes patient_key vs icn usage
+5. **Data Ownership** - Prevents ETL conflicts with 999-series ICNs
+6. **Audit Logging** - Extends to clinical data access
+7. **Security Hardening** - Production checklist (CSRF, rate limiting, TLS)
 
 **Next Step:** Integrate these updates into `med-z4-design.md` at the specified section numbers.
 
@@ -4827,20 +4831,20 @@ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
 │ ║  Patient Roster                                   [+ Add New Patient] ║   │
 │ ╠═══════════════════════════════════════════════════════════════════════╣   │
 │ ║                                                                       ║   │
-│ ║  ┌─────────┬─────────────┬──────────┬───────────┬──────────────────┐ ║   │
-│ ║  │ ICN     │ Name        │ Gender   │ DOB       │ Actions          │ ║   │
-│ ║  ├─────────┼─────────────┼──────────┼───────────┼──────────────────┤ ║   │
-│ ║  │ 999V... │ Doe, John   │ M        │ 1975-03-15│ [View] [Set CCOW]│ ║   │
-│ ║  │ 999V... │ Smith, Jane │ F        │ 1982-07-22│ [View] [Set CCOW]│ ║   │
-│ ║  │ 999V... │ Brown, Bob  │ M        │ 1968-11-30│ [View] [Set CCOW]│ ║   │
-│ ║  │ 999V... │ Davis, Sue  │ F        │ 1995-01-08│ [View] [Set CCOW]│ ║   │
-│ ║  └─────────┴─────────────┴──────────┴───────────┴──────────────────┘ ║   │
+│ ║  ┌─────────┬─────────────┬──────────┬───────────┬──────────────────┐  ║   │
+│ ║  │ ICN     │ Name        │ Gender   │ DOB       │ Actions          │  ║   │
+│ ║  ├─────────┼─────────────┼──────────┼───────────┼──────────────────┤  ║   │
+│ ║  │ 999V... │ Doe, John   │ M        │ 1975-03-15│ [View] [Set CCOW]│  ║   │
+│ ║  │ 999V... │ Smith, Jane │ F        │ 1982-07-22│ [View] [Set CCOW]│  ║   │
+│ ║  │ 999V... │ Brown, Bob  │ M        │ 1968-11-30│ [View] [Set CCOW]│  ║   │
+│ ║  │ 999V... │ Davis, Sue  │ F        │ 1995-01-08│ [View] [Set CCOW]│  ║   │
+│ ║  └─────────┴─────────────┴──────────┴───────────┴──────────────────┘  ║   │
 │ ║                                                                       ║   │
 │ ║  Total Patients: 4                                                    ║   │
 │ ╚═══════════════════════════════════════════════════════════════════════╝   │
 │                                                                             │
 │ ╔═══════════════════════════════════════════════════════════════════════╗   │
-│ ║  CCOW Debug Panel                                         [Collapse] ║   │
+│ ║  CCOW Debug Panel                                         [Collapse]  ║   │
 │ ╠═══════════════════════════════════════════════════════════════════════╣   │
 │ ║  Current Context: None                                                ║   │
 │ ║  Last Updated: --                                                     ║   │
@@ -5323,7 +5327,7 @@ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ ┌─────────────────────────────────────────────────────────────────────────┐ │
-│ │ med-z4   [CCOW: Smith, Jane | 999V123456 | DOB: 1982-07-22]   [Logout] │ │
+│ │ med-z4   [CCOW: Smith, Jane | 999V123456 | DOB: 1982-07-22]   [Logout]  │ │
 │ └─────────────────────────────────────────────────────────────────────────┘ │
 │                                                                             │
 │ ╔═══════════════════════════════════════════════════════════════════════╗   │
@@ -5342,27 +5346,27 @@ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
 │ ║  Clinical Data                                                        ║   │
 │ ╠═══════════════════════════════════════════════════════════════════════╣   │
 │ ║                                                                       ║   │
-│ ║  ┌─────────────────────────────────────────────────────────────────┐ ║   │
-│ ║  │ 📊 Vital Signs (3)                               [+ Add Vital] │ ║   │
-│ ║  ├─────────────────────────────────────────────────────────────────┤ ║   │
-│ ║  │ 2026-01-20  BP: 120/80  HR: 72  Temp: 98.6°F   [Edit] [Delete] │ ║   │
-│ ║  │ 2026-01-15  BP: 118/78  HR: 70  Temp: 98.4°F   [Edit] [Delete] │ ║   │
-│ ║  │ 2026-01-10  BP: 122/82  HR: 74  Temp: 98.7°F   [Edit] [Delete] │ ║   │
-│ ║  └─────────────────────────────────────────────────────────────────┘ ║   │
+│ ║  ┌─────────────────────────────────────────────────────────────────┐  ║   │
+│ ║  │ 📊 Vital Signs (3)                               [+ Add Vital]  │  ║   │
+│ ║  ├─────────────────────────────────────────────────────────────────┤  ║   │
+│ ║  │ 2026-01-20  BP: 120/80  HR: 72  Temp: 98.6°F   [Edit] [Delete]  │  ║   │
+│ ║  │ 2026-01-15  BP: 118/78  HR: 70  Temp: 98.4°F   [Edit] [Delete]  │  ║   │
+│ ║  │ 2026-01-10  BP: 122/82  HR: 74  Temp: 98.7°F   [Edit] [Delete]  │  ║   │
+│ ║  └─────────────────────────────────────────────────────────────────┘  ║   │
 │ ║                                                                       ║   │
-│ ║  ┌─────────────────────────────────────────────────────────────────┐ ║   │
-│ ║  │ ⚠️  Allergies (2)                              [+ Add Allergy] │ ║   │
-│ ║  ├─────────────────────────────────────────────────────────────────┤ ║   │
-│ ║  │ Penicillin - Severe: Anaphylaxis               [Edit] [Delete] │ ║   │
-│ ║  │ Peanuts - Moderate: Hives, swelling            [Edit] [Delete] │ ║   │
-│ ║  └─────────────────────────────────────────────────────────────────┘ ║   │
+│ ║  ┌─────────────────────────────────────────────────────────────────┐  ║   │
+│ ║  │ ⚠️  Allergies (2)                              [+ Add Allergy]  │  ║   │
+│ ║  ├─────────────────────────────────────────────────────────────────┤  ║   │
+│ ║  │ Penicillin - Severe: Anaphylaxis               [Edit] [Delete]  │  ║   │
+│ ║  │ Peanuts - Moderate: Hives, swelling            [Edit] [Delete]  │  ║   │
+│ ║  └─────────────────────────────────────────────────────────────────┘  ║   │
 │ ║                                                                       ║   │
-│ ║  ┌─────────────────────────────────────────────────────────────────┐ ║   │
-│ ║  │ 📝 Clinical Notes (1)                            [+ Add Note]  │ ║   │
-│ ║  ├─────────────────────────────────────────────────────────────────┤ ║   │
-│ ║  │ 2026-01-18 Progress Note by Dr. Johnson        [View] [Delete] │ ║   │
-│ ║  │ "Patient presents with..."                                     │ ║   │
-│ ║  └─────────────────────────────────────────────────────────────────┘ ║   │
+│ ║  ┌─────────────────────────────────────────────────────────────────┐  ║   │
+│ ║  │ 📝 Clinical Notes (1)                            [+ Add Note]   │  ║   │
+│ ║  ├─────────────────────────────────────────────────────────────────┤  ║   │
+│ ║  │ 2026-01-18 Progress Note by Dr. Johnson        [View] [Delete]  │  ║   │
+│ ║  │ "Patient presents with..."                                      │  ║   │
+│ ║  └─────────────────────────────────────────────────────────────────┘  ║   │
 │ ║                                                                       ║   │
 │ ╚═══════════════════════════════════════════════════════════════════════╝   │
 │                                                                             │
@@ -5980,7 +5984,6 @@ def calculate_age(birth_date):
 
 ---
 
-(Continuing in next message due to length...)
 ## 15.5 Add/Edit Patient Form
 
 ### Wireframe
@@ -5995,23 +5998,23 @@ def calculate_age(birth_date):
 ╠═══════════════════════════════════════════════════════════════╣
 ║                                                               ║
 ║  Personal Information                                         ║
-║  ┌─────────────────────────────────────────────────────────┐ ║
-║  │ First Name: *                                           │ ║
-║  │ [_______________________]                               │ ║
-║  │                                                         │ ║
-║  │ Last Name: *                                            │ ║
-║  │ [_______________________]                               │ ║
-║  │                                                         │ ║
-║  │ Date of Birth: *                                        │ ║
-║  │ [MM] / [DD] / [YYYY]                                    │ ║
-║  │                                                         │ ║
-║  │ Gender: *                                               │ ║
-║  │ ○ Male   ○ Female   ○ Other                             │ ║
-║  │                                                         │ ║
-║  │ Social Security Number:                                 │ ║
-║  │ [___] - [__] - [____]                                   │ ║
-║  │ ℹ️  Optional. Will be masked in display.                │ ║
-║  └─────────────────────────────────────────────────────────┘ ║
+║  ┌─────────────────────────────────────────────────────────┐  ║
+║  │ First Name: *                                           │  ║
+║  │ [_______________________]                               │  ║
+║  │                                                         │  ║
+║  │ Last Name: *                                            │  ║
+║  │ [_______________________]                               │  ║
+║  │                                                         │  ║
+║  │ Date of Birth: *                                        │  ║
+║  │ [MM] / [DD] / [YYYY]                                    │  ║
+║  │                                                         │  ║
+║  │ Gender: *                                               │  ║
+║  │ ○ Male   ○ Female   ○ Other                             │  ║
+║  │                                                         │  ║
+║  │ Social Security Number:                                 │  ║
+║  │ [___] - [__] - [____]                                   │  ║
+║  │ ℹ️  Optional. Will be masked in display.                │  ║
+║  └─────────────────────────────────────────────────────────┘  ║
 ║                                                               ║
 ║  ℹ️  Fields marked with * are required                        ║
 ║                                                               ║
@@ -6590,7 +6593,7 @@ def calculate_age(birth_date):
 │  [YYYY-MM-DD] [HH:MM]                                       │
 │                                                             │
 │  Blood Pressure:                                            │
-│  Systolic: * [___] / Diastolic: * [___]  mmHg              │
+│  Systolic: * [___] / Diastolic: * [___]  mmHg               │
 │                                                             │
 │  Heart Rate: *                                              │
 │  [___] bpm                                                  │
@@ -7544,16 +7547,13 @@ body {
 
 ---
 
-**End of Section 15: UI/UX Design & Wireframes**
 # 16. Implementation Mapping: Roadmap ↔ UI/UX
 
-**🎯 START HERE:** This section is your primary implementation guide. It provides a clear mapping between the Implementation Roadmap (Section 10) and the UI/UX Design Specifications (Section 15), ensuring you know exactly which wireframes, templates, CSS, and backend routes to implement at each phase.
+**START HERE:** This section is your primary implementation guide. It provides a clear mapping between the Implementation Roadmap (Section 10) and the UI/UX Design Specifications (Section 15), ensuring you know exactly which wireframes, templates, CSS, and backend routes to implement at each phase.
 
 **Purpose:** When Section 10 says "Create \`templates/login.html\`", this section tells you to copy the complete template from Section 15.2, including all associated CSS, HTMX patterns, and backend routes.
 
 ---
-
-**Add as New Subsection 16.1 in Section 16 (Implementation Mapping) - Insert BEFORE existing content:**
 
 ### 16.1 Routes and Templates Contract
 
@@ -7634,9 +7634,6 @@ This table provides a complete reference for all HTTP endpoints, authentication 
 - **`hx-target`:** DOM element to update (e.g., `#form-errors`, `closest .vital-item`)
 - **`hx-swap`:** How to replace content (`outerHTML`, `innerHTML`, `none`, `outerHTML swap:1s` for animation)
 - **`hx-on::after-request`:** JavaScript callback after request completes
-
----
-
 
 ---
 
