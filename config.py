@@ -8,8 +8,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Application Settings
 class AppSettings(BaseSettings):
-    name: str = "med-z4 (config)"
-    version: str = "0.1.0 (config)"
+    name: str = "med-z4 (fron config.py)"
+    version: str = "0.1.0 (from config.py)"
     port: int = 8005
     debug: bool = True
 
@@ -36,11 +36,31 @@ class SessionSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix='SESSION_', extra="ignore")
 
 
+# CCOW Context Vault Settings
+class CCOWSettings(BaseSettings):
+    base_url: str
+    health_endpoint: str
+
+    # Pydantic will look for CCOW_BASE_URL, CCOW_HEALTH_ENDPOINT, etc.
+    model_config = SettingsConfigDict(env_file=".env", env_prefix='CCOW_', extra="ignore")
+
+
+# VistA Real-time Service
+class VistaSettings(BaseSettings):
+    base_url: str
+    health_endpoint: str
+
+    # Pydantic will look for VISTA_BASE_URL, VISTA_HEALTH_ENDPOINT, etc.
+    model_config = SettingsConfigDict(env_file=".env", env_prefix='VISTA_', extra="ignore")
+
+
 # Main Settings container
 class Settings(BaseSettings):
     app: AppSettings = AppSettings()
     sample: SampleSettings = SampleSettings()
     session: SessionSettings = SessionSettings()
+    ccow: CCOWSettings = CCOWSettings()
+    vista: VistaSettings = VistaSettings()
 
 # Instantiate the settings once to be imported elsewhere
 settings = Settings()

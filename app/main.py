@@ -13,8 +13,8 @@
 # -----------------------------------------------------------------
 
 # Main imports
-import logging
-import uvicorn
+# import logging
+# import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -33,6 +33,10 @@ print(f"         Sample API URL: {settings.sample.api_url}")
 print(f"Session Timeout Minutes: {settings.session.timeout_minutes}")
 print(f"    Session Cookie Name: {settings.session.cookie_name}")
 print(f" Session Cookie Max Age: {settings.session.cookie_max_age}")
+print(f"          CCOW Base URL: {settings.ccow.base_url}")
+print(f"   CCOW Health Endpoint: {settings.ccow.health_endpoint}")
+print(f"         VistA Base URL: {settings.vista.base_url}")
+print(f"  VistA Health Endpoint: {settings.vista.health_endpoint}")
 print()
 
 # Initialize the FastAPI app
@@ -46,7 +50,7 @@ templates = Jinja2Templates(directory="app/templates")
 
 # Register all routers
 app.include_router(admin.router)
-# app.include_router(health.router)
+app.include_router(health.router)
 
 # Create root route handler
 @app.get("/", response_class=HTMLResponse)

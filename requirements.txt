@@ -2,8 +2,7 @@
 # Master dependencis list with pinned versions
 # ---------------------------------------------
 
-# Initial set
-# -----------
+# ---- Initial set ----
 fastapi==0.123.9             # Pinning to avoid breaking changes
 uvicorn[standard]==0.38.0    # Production server with high-perf extras
 Jinja2==3.1.6
@@ -16,8 +15,7 @@ python-dotenv==1.2.1         # Loads environment variables from .env
 pydantic-settings
 httpx
 
-# More to be added later...
-# -------------------------
+# ---- More to be added later ----
 
 
 
