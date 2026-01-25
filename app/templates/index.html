@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="welcome-card">
+    <h2>Welcome to the Admin Dashboard</h2>
+    <p>This tool is connected to: <strong>{{ settings.sample.api_url }}</strong></p>
+    
+    <div class="test-zone">
+        <h3>HTMX Connectivity Test</h3>
+
+        <button hx-get="/hello" 
+                hx-target="#test-results" 
+                hx-swap="innerHTML">
+            Test HTMX
+        </button>
+
+        <div class="input-group">
+            <button hx-get="/admin/test-fetch" 
+                    hx-target="#test-results" 
+                    hx-swap="innerHTML"
+                    hx-include="#user-id">
+                Fetch External User
+            </button>
+
+            <label for="user-id">User ID (1-10):</label>
+            <input type="number" 
+                   id="user-id" 
+                   name="user_id" 
+                   value="1" 
+                   min="1" 
+                   max="10">
+        </div>
+
+        <button hx-get="/health/ccow" 
+                hx-target="#test-results" 
+                hx-swap="innerHTML">
+            Check CCOW Health
+        </button>
+
+        <button hx-get="/health/vista" 
+                hx-target="#test-results" 
+                hx-swap="innerHTML">
+            Check VistA Health
+        </button>
+
+        <div id="test-results">
+            </div>
+    </div>
+</section>
+{% endblock %}

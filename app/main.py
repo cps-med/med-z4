@@ -5,10 +5,56 @@
 #
 # Dependencies:
 # pip install fastapi "uvicorn[standard]"
-# pip install jinja2 pytnon-multipart python-dotenv
+# pip install jinja2 python-multipart python-dotenv
 #
 # Run from root: uvicorn app.main:app --reload --port 8005
 #    Access via: localhost:8005
 #   Stop server: CTRL + C
 # -----------------------------------------------------------------
 
+# Main imports
+import logging
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+# Routes
+from app.routes import admin, health
+
+# Import 'settings' object from root-level config file
+from config import settings
+
+print()
+print(f"       Application Name: {settings.app.name}")
+print(f"    Application Version: {settings.app.version}")
+print(f"         Sample API URL: {settings.sample.api_url}")
+print(f"Session Timeout Minutes: {settings.session.timeout_minutes}")
+print(f"    Session Cookie Name: {settings.session.cookie_name}")
+print(f" Session Cookie Max Age: {settings.session.cookie_max_age}")
+print()
+
+# Initialize the FastAPI app
+app = FastAPI(title=settings.app.name)
+
+# Mount the static files directory
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+# Setup Jinja2 templates directory
+templates = Jinja2Templates(directory="app/templates")
+
+# Register all routers
+app.include_router(admin.router)
+# app.include_router(health.router)
+
+# Create root route handler
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request, "settings": settings})
+
+
+# Simple route handler
+@app.get("/hello", response_class=HTMLResponse)
+async def hello_htmx():
+    return"<p class='success-msg'>HTMX is working! Connection successful.</p>"

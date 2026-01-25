@@ -1,16 +1,23 @@
-# -----------------------------
-# Master Libraries List
-# -----------------------------
+# ---------------------------------------------
+# Master dependencis list with pinned versions
+# ---------------------------------------------
 
 # Initial set
-fastapi==0.123.9
-uvicorn==0.38.0
+# -----------
+fastapi==0.123.9             # Pinning to avoid breaking changes
+uvicorn[standard]==0.38.0    # Production server with high-perf extras
 Jinja2==3.1.6
 python-multipart==0.0.20
 SQLAlchemy==2.0.36
 psycopg2-binary==2.9.11
 bcrypt==4.2.1
 httpx==0.28.1
-python-dotenv==1.2.1
+python-dotenv==1.2.1         # Loads environment variables from .env
+pydantic-settings
+httpx
 
 # More to be added later...
+# -------------------------
+
+
+
