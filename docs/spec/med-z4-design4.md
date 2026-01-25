@@ -1,455 +1,5 @@
 # med-z4 (Simple EHR) – Design Specification
 
-**Document Version:** v2.0 (Restructured)  
-**Date:** January 22, 2026  
-**Repository:** `med-z4`  
-**Status:** Final Design - Ready for Implementation  
-**Author:** Chuck Sylvester  
-
----
-
-## Document Purpose
-
-This comprehensive design specification provides complete technical guidance for implementing med-z4, a standalone "Simple EHR" application that serves as a CCOW participant and clinical data management tool for the med-z1 ecosystem.
-
-**Target Audience:** Developers implementing med-z4 from scratch with educational explanations for learning FastAPI, HTMX, PostgreSQL, and CCOW patterns.
-
-**Scope:** This document covers Phases 1-8 implementation (authentication, CCOW integration, patient roster, CRUD operations for clinical data).
-
----
-
-## Table of Contents
-
-1. [Executive Summary](#1-executive-summary)
-2. [System Architecture](#2-system-architecture)
-3. [Repository Structure](#3-repository-structure)
-4. [Configuration Management](#4-configuration-management)
-5. [Database Design & Schema Sharing](#5-database-design--schema-sharing)
-6. [Authentication Design](#6-authentication-design)
-7. [CCOW Context Management](#7-ccow-context-management)
-8. [Core Features (Phase 1-5)](#8-core-features-phase-1-5)
-9. [Clinical Data Management (CRUD) - Phase 6-8](#9-clinical-data-management-crud---phase-6-8)
-10. [Implementation Roadmap](#10-implementation-roadmap)
-11. [UI/UX Design & Wireframes](#11-uiux-design--wireframes)
-12. [Testing Strategy](#12-testing-strategy)
-13. [Known Limitations & Future Enhancements](#13-known-limitations--future-enhancements)
-14. [Deployment Considerations](#14-deployment-considerations)
-15. [References](#15-references)
-16. [Glossary](#16-glossary)
-
-**Appendices:**
-- [Appendix A: Quick Reference Commands](#appendix-a-quick-reference-commands)
-- [Appendix B: Troubleshooting Guide](#appendix-b-troubleshooting-guide)
-- [Appendix C: Template Variable Reference](#appendix-c-template-variable-reference)
-
----
-
-## 1. Executive Summary
-
-### 1.1 Purpose
-
-**med-z4** is a standalone "Simple EHR" application designed to simulate a primary Electronic Health Record system. Its role in the med-z1 ecosystem is to act as a **CCOW Participant** that validates multi-application patient context synchronization with the med-z1 longitudinal viewer.
-
-Unlike med-z1 (which is a specialized read-only viewer), med-z4 simulates the "source of truth" workflow where a clinician actively manages patient data. It demonstrates that when a user changes patients in med-z4, the context automatically propagates to med-z1 via the central CCOW Context Vault, and vice versa.
-
-**Key Distinction:** med-z4 is both a **context driver** (setting patient context) and a **data factory** (creating/editing clinical data directly in the PostgreSQL serving database).
-
-### 1.2 Design Philosophy
-
-This design specification follows a **production-ready, learning-focused approach**:
-
-- **Production-Ready:** Full password authentication, secure session management, proper database transactions, error handling
-- **Educational:** Extensive technical explanations, learning notes, and implementation guidance for developers new to FastAPI/HTMX/PostgreSQL patterns
-- **Incremental:** Clear phased implementation (Phases 1-8) from foundation to full CRUD capabilities
-- **Self-Sufficient:** Separate repository with independent configuration, avoiding complex dependencies on med-z1 codebase
-
-### 1.3 Key Objectives
-
-1. **Repository Isolation:** Operate as a completely self-sufficient application in the `med-z4` repository
-2. **Shared Identity:** Connect to the existing med-z1 PostgreSQL database (`medz1`) to utilize the same `auth` and `clinical` schemas
-3. **Context Interoperability:** Implement full CCOW operations (Get, Set, Clear) with proper authentication
-4. **Production-Grade Authentication:** Bcrypt password hashing, secure session cookies, session expiration handling
-5. **Clinical Data Management:** CRUD operations for patients, vitals, allergies, notes, and other clinical domains
-6. **Visual Distinction:** Teal/Emerald theme to clearly differentiate from med-z1's Blue/Slate theme
-
-### 1.4 Success Criteria
-
-**Phase 1-5 (CCOW Context Synchronization):**
-- User can log into both med-z1 and med-z4 with separate sessions
-- Selecting a patient in med-z4 updates med-z1's active patient (and vice versa)
-- Context changes are visible within 2-5 seconds (polling interval)
-- Session validation prevents unauthorized access
-
-**Phase 6-8 (Clinical Data Management):**
-- User can create new patients with unique ICN identifiers (999 series)  
-- User can add vitals, allergies, and clinical notes for any patient
-- Data created in med-z4 immediately appears in med-z1 UI
-- Data integrity constraints enforced (required fields, data types, foreign keys)
-
----
-
-## 2. System Architecture
-
-### 2.1 Ecosystem Overview
-
-The med-z4 application operates alongside med-z1 as a peer CCOW participant, sharing database resources but maintaining strict application-level isolation.
-
-```text
-                       ┌──────────────────────────────────┐
-                       │        Clinician (User)          │
-                       └───────────────┬──────────────────┘
-                                       │
-                    ┌──────────────────┴───────────────────┐
-                    │                                      │
-            Browser Tab A                          Browser Tab B
-          (localhost:8000)                       (localhost:8005)
-                    │                                      │
-      ┌─────────────▼──────────────┐         ┌─────────────▼──────────────┐
-      │        med-z1 App          │         │        med-z4 App          │
-      │   (Longitudinal Viewer)    │         │       (Simple EHR)         │
-      │                            │         │                            │
-      │  - Blue/Slate Theme        │         │  - Teal/Emerald Theme      │
-      │  - Read-Only Clinical Data │         │  - CRUD Clinical Data      │
-      │  - Dashboard Widgets       │         │  - Patient Roster          │
-      │  - Port 8000               │         │  - Port 8005               │
-      └─────────────┬──────────────┘         └─────────────┬──────────────┘
-                    │                                      │
-                    │     ┌─────────────────────────┐      │
-                    └─────►   CCOW Context Vault    ◄──────┘
-                          │     (Port 8001)         │
-                          │                         │
-                          │ Multi-User Context Mgmt │
-                          │   Session Validation    │
-                          └────────────┬────────────┘
-                                       │
-                                       │ SQL Queries
-                                       │ (auth.sessions validation)
-                                       │ (clinical data read/write)
-                                       │
-                  ┌────────────────────▼──────────────────────┐
-                  │       PostgreSQL Database (medz1)         │
-                  │                                           │
-                  │   ┌───────────────────────────────────┐   │
-                  │   │  Schema: auth                     │   │
-                  │   │  - users (shared)                 │   │
-                  │   │  - sessions (shared)              │   │
-                  │   │  - audit_logs (shared)            │   │
-                  │   └───────────────────────────────────┘   │
-                  │                                           │
-                  │  ┌────────────────────────────────────┐   │
-                  │  │  Schema: clinical                  │   │
-                  │  │  - patient_demographics            │   │
-                  │  │  - patient_vitals                  │   │
-                  │  │  - patient_allergies               │   │
-                  │  │  - patient_clinical_notes          │   │
-                  │  │  - patient_medications_*           │   │
-                  │  │  - patient_encounters              │   │
-                  │  │  - patient_labs                    │   │
-                  │  │  - patient_immunizations           │   │
-                  │  │  (12 clinical tables total)        │   │
-                  │  └────────────────────────────────────┘   │
-                  │                                           │
-                  │  ┌────────────────────────────────────┐   │
-                  │  │  Schema: reference                 │   │
-                  │  │  - vaccine (CVX codes)             │   │
-                  │  └────────────────────────────────────┘   │
-                  └───────────────────────────────────────────┘
-```
-
-### 2.2 Integration Points
-
-| Component | Configuration | Description |
-|-----------|--------------|-------------|
-| **Service Port** | `8005` | Distinct from med-z1 (8000), CCOW Vault (8001), VistA RPC Broker (8003) |
-| **Database Host** | `localhost:5432` | Shared PostgreSQL instance running in Docker |
-| **Database Name** | `medz1` | Same database as med-z1 (shared schemas) |
-| **Database User** | `postgres` | Shared credential (from `.env` file) |
-| **CCOW Vault URL** | `http://localhost:8001` | Targets existing CCOW Context Vault service |
-| **Session Cookie Name** | `med_z4_session_id` | **Different from med-z1** to enable independent sessions |
-| **Session Timeout** | 25 minutes | Matches med-z1 default (configurable) |
-| **Cookie Security** | `HttpOnly=True`, `SameSite=Lax` | Production-ready security settings |
-
-**Key Decision: Separate Session Cookies**
-
-med-z4 uses a **different session cookie name** (`med_z4_session_id`) than med-z1 (`session_id`) for the following reasons:
-
-1. **Independent Testing:** Allows a user to log into both applications simultaneously with different user accounts (useful for testing multi-user CCOW scenarios)
-2. **Session Isolation:** Prevents accidental session conflicts or overwrites
-3. **Production Realism:** Simulates real-world scenario where different EHR systems maintain separate sessions
-4. **Security:** Each application validates its own sessions independently
-
-**Trade-off:** User must log in separately to each application. This is acceptable and realistic for enterprise healthcare systems.
-
-### 2.3 Technology Stack
-
-med-z4 uses the **exact same technology stack** as med-z1 for consistency and learning transfer:
-
-| Layer | Technology | Version | Purpose |
-|-------|-----------|---------|---------|
-| **Language** | Python | 3.11 (macOS) / 3.10 (Linux) | Application runtime |
-| **Web Framework** | FastAPI | Latest | REST API and web application framework |
-| **Template Engine** | Jinja2 | Latest | Server-side HTML rendering |
-| **Interactivity** | HTMX | 1.9.x | Dynamic UI updates without JavaScript |
-| **Session Management** | Starlette SessionMiddleware | Latest | Encrypted session cookies |
-| **Database** | PostgreSQL | 16 | Shared with med-z1 |
-| **ORM** | SQLAlchemy | 2.x | Database queries and models |
-| **Password Hashing** | bcrypt | Latest | Secure password storage |
-| **HTTP Client** | httpx | Latest | CCOW Vault communication |
-| **ASGI Server** | Uvicorn | Latest | Development server with hot reload |
-
-**Learning Note: Why This Stack?**
-
-- **FastAPI:** Modern, fast, automatic API documentation, type hints, async support
-- **Jinja2:** Mature templating with inheritance, macros, filters (Django-like syntax)
-- **HTMX:** Server-side rendering with SPA-like UX (no complex JavaScript build tooling)
-- **Starlette Sessions:** Built-in encrypted cookie sessions (no Redis/database needed for Phase 1)
-- **SQLAlchemy:** Industry-standard Python ORM with raw SQL support when needed
-- **bcrypt:** Industry-standard password hashing (slow by design to resist brute-force attacks)
-
-### 2.4 Async vs Sync Decision
-
-**This specification uses async SQLAlchemy patterns** for consistency with modern FastAPI best practices:
-
-```python
-# ✅ Standard pattern used throughout this specification
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-
-async def get_patient(db: AsyncSession, icn: str):
-    result = await db.execute(
-        select(PatientDemographics).where(PatientDemographics.patient_key == icn)
-    )
-    return result.scalar_one_or_none()
-```
-
-**Rationale:**
-- Async patterns handle concurrent requests more efficiently
-- Better alignment with FastAPI's async-first design
-- Consistent with CCOW client operations (httpx async)
-
----
-
-## 3. Repository Structure
-
-med-z4 follows a **flat, simple structure** optimized for learning and rapid development:
-
-```text
-med-z4/
-├── .env                                # Environment configuration (DB credentials, secrets)
-├── .gitignore                          # Git ignore patterns (Python, IDE, secrets)
-├── README.md                           # Quick start guide and development instructions
-├── requirements.txt                    # Python dependencies with pinned versions
-├── config.py                           # Centralized configuration loader (reads .env)
-├── database.py                         # SQLAlchemy database engine and session management
-├── main.py                             # FastAPI application entry point
-│
-├── docs/                               # Application documentation
-│   ├── guide/                          # Developer setup and other guides
-│   └── spec/                           # Design specifications
-│
-├── app/                                # Application code (models, routes, services)
-│   ├── __init__.py
-│   │
-│   ├── models/                         # Database models (SQLAlchemy/Pydantic)
-│   │   ├── __init__.py
-│   │   ├── auth.py                     # User, Session models (matches med-z1 auth schema)
-│   │   └── clinical.py                 # Clinical models (Patient, Vital, Allergy, Note)
-│   │
-│   ├── routes/                         # FastAPI route handlers (endpoints)
-│   │   ├── __init__.py
-│   │   ├── auth.py                     # Login, logout, session management
-│   │   ├── dashboard.py                # Patient roster, dashboard
-│   │   ├── context.py                  # CCOW context operations (get/set/clear)
-│   │   └── crud.py                     # Patient/clinical data CRUD operations (Phase 6+)
-│   │
-│   ├── services/                       # Business logic layer
-│   │   ├── __init__.py
-│   │   ├── auth_service.py             # Password verification, session creation
-│   │   ├── ccow_client.py              # CCOW Vault HTTP client
-│   │   ├── patient_service.py          # Patient data operations (Phase 6+)
-│   │   └── audit_service.py            # Clinical audit logging
-│   │
-│   └── middleware/                     # Custom middleware (if needed)
-│       └── __init__.py
-│
-├── templates/                          # Jinja2 HTML templates
-│   ├── base.html                       # Base layout with Teal theme
-│   ├── login.html                      # Login form with password input
-│   ├── dashboard.html                  # Patient roster table
-│   ├── patient_form.html               # New/edit patient form (Phase 6+)
-│   ├── patient_detail.html             # Patient detail page with tabs (Phase 6+)
-│   │
-│   └── partials/                       # HTMX partial templates (fragments)
-│       ├── patient_row.html            # Single patient table row
-│       ├── ccow_banner.html            # Top banner with active patient
-│       ├── ccow_debug_panel.html       # CCOW status widget
-│       └── forms/                      # Reusable form components (Phase 6+)
-│           ├── vital_form.html
-│           ├── allergy_form.html
-│           └── note_form.html
-│
-└── static/                             # Static assets (CSS, JS, images)
-    ├── css/
-    │   ├── style.css                   # Base styles and CSS variables
-    │   ├── login.css                   # Login page styles
-    │   ├── dashboard.css               # Dashboard/roster styles
-    │   ├── patient_detail.css          # Patient detail page styles
-    │   └── forms.css                   # Form styles
-    ├── js/
-    │   └── htmx.min.js                 # HTMX library (1.9.x)
-    └── images/
-        └── logo-teal.png               # med-z4 logo, favicon, and other images
-```
-
-**Learning Note: Directory Structure Rationale**
-
-- **Flat Structure:** Easier to navigate for learning (vs. deeply nested packages)
-- **models/:** Separates database models from business logic (Single Responsibility Principle)
-- **routes/:** One file per major feature area (keeps route files manageable)
-- **services/:** Business logic extracted from routes (testable, reusable)
-- **templates/partials/:** HTMX pattern - small HTML fragments for dynamic updates
-- **static/:** Public assets served directly by FastAPI StaticFiles middleware
-
-**Python Module Imports:**
-
-With this structure, imports look like:
-```python
-from app.models.auth import User, Session
-from app.services.auth_service import verify_password, create_session
-from app.services.ccow_client import CCOWClient
-```
-
----
-
-## 4. Configuration Management
-
-### 4.1 Environment Variables (.env)
-
-The `.env` file stores all configuration and secrets. **Never commit this file to Git.**
-
-**Template (.env.example):**
-
-```bash
-# ---------------------------------------------------------------------
-# med-z4 Configuration
-# ---------------------------------------------------------------------
-
-# Application Settings
-APP_NAME=med-z4
-APP_PORT=8005
-DEBUG=True
-
-# Session Management
-SESSION_SECRET_KEY=your-secret-key-here-minimum-32-characters-long
-SESSION_TIMEOUT_MINUTES=25
-SESSION_COOKIE_NAME=med_z4_session_id
-
-# PostgreSQL Database (Shared with med-z1)
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=medz1
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=your-postgres-password-here
-
-# CCOW Context Vault
-CCOW_BASE_URL=http://localhost:8001
-
-# Security Settings
-BCRYPT_ROUNDS=12  # Password hashing cost factor (12 = ~300ms per hash)
-
-# Logging
-LOG_LEVEL=INFO
-```
-
-**Learning Note: Environment Variable Best Practices**
-
-- **Never hardcode secrets:** Database passwords, session keys must be in `.env`
-- **Use .env.example:** Commit a template with placeholder values for documentation
-- **Prefix by concern:** Group related settings (SESSION_*, POSTGRES_*, CCOW_*)
-- **Document units:** `SESSION_TIMEOUT_MINUTES` is clear (vs. ambiguous `SESSION_TIMEOUT`)
-- **Separate by environment:** Use `.env.dev`, `.env.prod` for different deployments
-
-### 4.2 Configuration Loader (config.py)
-
-Centralized configuration module that loads and validates environment variables:
-
-```python
-# config.py
-# Centralized configuration for med-z4
-# Reads from .env file and provides typed config objects
-
-import os
-from pathlib import Path
-from dotenv import load_dotenv
-
-# Load .env file from project root
-PROJECT_ROOT = Path(__file__).parent
-load_dotenv(PROJECT_ROOT / ".env")
-
-# ---------------------------------------------------------------------
-# Application Configuration
-# ---------------------------------------------------------------------
-
-APP_NAME = os.getenv("APP_NAME", "med-z4")
-APP_PORT = int(os.getenv("APP_PORT", "8005"))
-DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
-
-# ---------------------------------------------------------------------
-# Session Configuration
-# ---------------------------------------------------------------------
-
-SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY")
-if not SESSION_SECRET_KEY:
-    raise ValueError("SESSION_SECRET_KEY must be set in .env file")
-if len(SESSION_SECRET_KEY) < 32:
-    raise ValueError("SESSION_SECRET_KEY must be at least 32 characters")
-
-SESSION_TIMEOUT_MINUTES = int(os.getenv("SESSION_TIMEOUT_MINUTES", "25"))
-SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "med_z4_session_id")
-SESSION_COOKIE_MAX_AGE = SESSION_TIMEOUT_MINUTES * 60  # Convert to seconds
-
-# ---------------------------------------------------------------------
-# Database Configuration
-# ---------------------------------------------------------------------
-
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
-POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
-POSTGRES_DB = os.getenv("POSTGRES_DB", "medz1")
-POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
-
-if not POSTGRES_PASSWORD:
-    raise ValueError("POSTGRES_PASSWORD must be set in .env file")
-
-# SQLAlchemy async connection string
-DATABASE_URL = f"postgresql+asyncpg://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-
-# ---------------------------------------------------------------------
-# CCOW Configuration
-# ---------------------------------------------------------------------
-
-CCOW_BASE_URL = os.getenv("CCOW_BASE_URL", "http://localhost:8001")
-
-# ---------------------------------------------------------------------
-# Security Configuration
-# ---------------------------------------------------------------------
-
-BCRYPT_ROUNDS = int(os.getenv("BCRYPT_ROUNDS", "12"))
-
-# ---------------------------------------------------------------------
-# Logging Configuration
-# ---------------------------------------------------------------------
-
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-```
-
-**Learning Note: Configuration Pattern**
-
-1. **Fail Fast:** Raise errors on startup if required config is missing (don't fail later during runtime)
-2. **Type Conversion:** Convert strings to int/bool where needed (`int(os.getenv(...))`)
-3. **Sensible Defaults:** Provide defaults for non-sensitive settings (port, timeout)
-4. **Validation:** Check constraints (e.g., secret key length) before app starts
-5. **Single Import:** Other modules import from `config` (not `os.getenv` scattered everywhere)
-
 ---
 
 ## 5. Database Design & Schema Sharing
@@ -1279,11 +829,19 @@ class CCOWClient:
 
 ### 8.3 Feature: CCOW Debug Panel
 
-**Purpose:** Show CCOW vault status and context details for debugging during development.
+**Purpose:** Show CCOW vault status and context details for debugging during development. Displays vault health status (online/offline), current context patient ID, which application set the context, and last sync timestamp.
 
 **Route:** `GET /context/debug` (HTMX partial)
 
-**Implementation:** See Section 11.10 (Component Library) for template and CSS.
+**UI Components:**
+- Fixed position panel in bottom-right corner
+- Vault health indicator (green = online, red = offline)
+- Current context patient ID
+- "Set By" application name
+- Last sync timestamp
+- Auto-refreshes every 5 seconds via HTMX polling
+
+**Implementation:** See Section 11.10 (Component Library) for complete template, CSS, and route handler code.
 
 ---
 
@@ -2514,92 +2072,2006 @@ Similar structure to patient form with fields for:
 - Respiratory Rate (breaths/min)
 - Oxygen Saturation (%)
 
-### 11.7 HTMX Patterns
+### 11.7 HTMX Patterns (Summary)
 
-**Pattern 1: Polling for Context Updates**
-```html
-<div id="ccow-banner"
-     hx-get="/context/banner"
-     hx-trigger="load, every 5s"
-     hx-swap="outerHTML">
+
+### 11.8 Complete CSS Files
+
+The following sections contain the complete CSS files for production use.
+
+### 11.8.1 Dashboard CSS (static/css/dashboard.css)
+
+```css
+/* static/css/dashboard.css */
+
+/* Dashboard Container */
+.dashboard-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: var(--space-6);
+}
+
+/* Card Component */
+.card {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin-bottom: var(--space-6);
+  overflow: hidden;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-6);
+  border-bottom: 2px solid var(--gray-200);
+}
+
+.card-title {
+  font-size: var(--text-xl);
+  font-weight: bold;
+  color: var(--gray-900);
+  margin: 0;
+}
+
+.card-body {
+  padding: var(--space-6);
+}
+
+/* CCOW Banner */
+.ccow-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-6);
+  border-radius: 8px;
+  margin-bottom: var(--space-6);
+  transition: all 0.3s ease;
+}
+
+.ccow-banner.active {
+  background: linear-gradient(90deg, #d1fae5 0%, #a7f3d0 100%);
+  border-left: 4px solid var(--primary-teal);
+}
+
+.ccow-banner.inactive {
+  background: var(--gray-100);
+  border-left: 4px solid var(--gray-400);
+}
+
+.ccow-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.ccow-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.ccow-banner.active .ccow-icon {
+  color: var(--primary-teal);
+}
+
+.ccow-banner.inactive .ccow-icon {
+  color: var(--gray-400);
+}
+
+.ccow-label {
+  font-weight: 600;
+  font-size: var(--text-base);
+  color: var(--gray-900);
+}
+
+.ccow-patient-info {
+  display: flex;
+  gap: var(--space-6);
+  align-items: center;
+  flex: 1;
+  margin: 0 var(--space-6);
+}
+
+.patient-name {
+  font-weight: bold;
+  font-size: var(--text-lg);
+  color: var(--gray-900);
+}
+
+.patient-icn,
+.patient-dob {
+  font-size: var(--text-sm);
+  color: var(--gray-700);
+}
+
+.ccow-hint {
+  font-size: var(--text-sm);
+  color: var(--gray-600);
+  margin: 0;
+  margin-left: auto;
+}
+
+/* Data Table */
+.table-container {
+  overflow-x: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-table thead {
+  background-color: var(--primary-teal);
+  color: white;
+}
+
+.data-table th {
+  padding: var(--space-4);
+  text-align: left;
+  font-weight: 600;
+  font-size: var(--text-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.data-table tbody tr {
+  border-bottom: 1px solid var(--gray-200);
+  transition: background-color 0.2s ease;
+}
+
+.data-table tbody tr:nth-child(even) {
+  background-color: var(--gray-50);
+}
+
+.data-table tbody tr:hover {
+  background-color: #ccfbf1;
+}
+
+.data-table tbody tr.active-context {
+  background-color: #d1fae5;
+  border-left: 3px solid var(--primary-teal);
+}
+
+.data-table td {
+  padding: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--gray-700);
+}
+
+.actions-cell {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.table-footer {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--gray-200);
+}
+
+.roster-count {
+  font-size: var(--text-sm);
+  color: var(--gray-600);
+}
+
+/* Empty State */
+.empty-state {
+  text-align: center;
+  padding: var(--space-12) var(--space-6);
+}
+
+.empty-icon {
+  width: 80px;
+  height: 80px;
+  margin: 0 auto var(--space-4);
+  color: var(--gray-300);
+}
+
+.empty-message {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--gray-700);
+  margin-bottom: var(--space-2);
+}
+
+.empty-hint {
+  font-size: var(--text-sm);
+  color: var(--gray-500);
+  font-style: italic;
+}
+
+/* Badges */
+.badge {
+  display: inline-block;
+  padding: var(--space-1) var(--space-3);
+  border-radius: 12px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.badge-neutral {
+  background-color: var(--gray-200);
+  color: var(--gray-700);
+}
+
+.badge-teal {
+  background-color: var(--primary-100);
+  color: var(--primary-700);
+}
+
+/* Button Variants */
+.btn-outline {
+  background: transparent;
+  border: 2px solid var(--primary-teal);
+  color: var(--primary-teal);
+}
+
+.btn-outline:hover {
+  background: var(--primary-teal);
+  color: white;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--gray-700);
+}
+
+.btn-ghost:hover {
+  background: var(--gray-100);
+}
+
+.btn-icon-sm {
+  width: 16px;
+  height: 16px;
+}
+
+/* Utility Classes */
+.font-mono {
+  font-family: 'Courier New', monospace;
+}
+
+.font-semibold {
+  font-weight: 600;
+}
+
+.text-sm {
+  font-size: var(--text-sm);
+}
+
+.text-gray-600 {
+  color: var(--gray-600);
+}
 ```
 
-**Pattern 2: Button Click with Response Swap**
-```html
-<button hx-post="/context/set/{{ patient.icn }}"
-        hx-swap="none"
-        hx-on::after-request="htmx.trigger('#ccow-banner', 'load')">
-    Select
-</button>
+### 11.8.2 Patient Detail CSS (static/css/patient_detail.css)
+
+```css
+/* static/css/patient_detail.css */
+
+/* Patient Detail Container */
+.patient-detail-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: var(--space-6);
+}
+
+/* Back Link */
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--primary-teal);
+  text-decoration: none;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  margin-bottom: var(--space-4);
+}
+
+.back-link:hover {
+  text-decoration: underline;
+}
+
+.back-link svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Detail List */
+.detail-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--space-6);
+  margin: 0;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.detail-item dt {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--gray-600);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.detail-item dd {
+  font-size: var(--text-lg);
+  color: var(--gray-900);
+  margin: 0;
+}
+
+.patient-name {
+  font-weight: bold;
+  font-size: var(--text-xl);
+  color: var(--primary-teal-dark);
+}
+
+.age-badge {
+  font-size: var(--text-sm);
+  color: var(--gray-600);
+  font-weight: normal;
+}
+
+/* Clinical Section */
+.clinical-section {
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  margin-bottom: var(--space-4);
+  overflow: hidden;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-4);
+  background-color: var(--gray-50);
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.section-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-size: var(--text-base);
+}
+
+.section-icon {
+  width: 20px;
+  height: 20px;
+  color: var(--gray-600);
+  transition: transform 0.2s ease;
+}
+
+.section-icon.rotate-90 {
+  transform: rotate(90deg);
+}
+
+.section-title {
+  font-weight: 600;
+  color: var(--gray-900);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 var(--space-2);
+  background-color: var(--primary-teal);
+  color: white;
+  border-radius: 12px;
+  font-size: var(--text-xs);
+  font-weight: bold;
+}
+
+.section-content {
+  padding: var(--space-4);
+}
+
+/* Vitals List */
+.vitals-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.vital-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3);
+  background-color: var(--gray-50);
+  border-radius: 6px;
+  border-left: 3px solid var(--primary-teal);
+  transition: opacity 1s ease-out;
+}
+
+.vital-item.htmx-swapping {
+  opacity: 0;
+}
+
+.vital-date {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--gray-700);
+  min-width: 140px;
+}
+
+.vital-reading {
+  font-size: var(--text-sm);
+  color: var(--gray-900);
+  padding: var(--space-1) var(--space-3);
+  background-color: white;
+  border-radius: 4px;
+}
+
+.vital-reading.abnormal {
+  background-color: #fee2e2;
+  color: var(--danger-red);
+  font-weight: 600;
+}
+
+.vital-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* Allergies List */
+.allergies-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.allergy-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4);
+  background-color: var(--gray-50);
+  border-radius: 6px;
+  border-left: 3px solid var(--warning-amber);
+  transition: opacity 1s ease-out;
+}
+
+.allergy-item.htmx-swapping {
+  opacity: 0;
+}
+
+.allergy-item.severe {
+  border-left-color: var(--danger-red);
+  background-color: #fef2f2;
+}
+
+.allergy-info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1;
+}
+
+.allergen-name {
+  font-size: var(--text-base);
+  font-weight: bold;
+  color: var(--gray-900);
+}
+
+.severity-badge {
+  padding: var(--space-1) var(--space-3);
+  border-radius: 12px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.severity-severe {
+  background-color: var(--danger-red);
+  color: white;
+}
+
+.severity-moderate {
+  background-color: var(--warning-amber);
+  color: white;
+}
+
+.severity-mild {
+  background-color: #fbbf24;
+  color: var(--gray-900);
+}
+
+.reaction-text {
+  font-size: var(--text-sm);
+  color: var(--gray-600);
+}
+
+.allergy-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* Notes List */
+.notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.note-item {
+  padding: var(--space-4);
+  background-color: var(--gray-50);
+  border-radius: 6px;
+  border-left: 3px solid var(--info-blue);
+  transition: opacity 1s ease-out;
+}
+
+.note-item.htmx-swapping {
+  opacity: 0;
+}
+
+.note-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.note-date {
+  font-weight: 600;
+  color: var(--gray-700);
+}
+
+.note-type {
+  padding: var(--space-1) var(--space-2);
+  background-color: var(--info-blue);
+  color: white;
+  border-radius: 4px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.note-author {
+  color: var(--gray-600);
+}
+
+.note-preview {
+  font-size: var(--text-sm);
+  color: var(--gray-700);
+  margin-bottom: var(--space-3);
+  line-height: 1.6;
+}
+
+.note-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* Button Variants */
+.btn-xs {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  height: auto;
+}
+
+/* Action Buttons Group */
+.action-buttons {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* Page Footer */
+.page-footer {
+  margin-top: var(--space-8);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--gray-200);
+}
 ```
 
-**Pattern 3: Delete with Confirmation**
-```html
-<button hx-delete="/patients/{{ icn }}/vitals/{{ vital.vital_id }}"
-        hx-confirm="Delete this vital?"
-        hx-target="closest .vital-item"
-        hx-swap="outerHTML swap:1s">
-    Delete
-</button>
+### 11.8.3 Forms CSS (static/css/forms.css)
+
+```css
+/* static/css/forms.css */
+
+/* Form Container */
+.form-container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: var(--space-6);
+}
+
+/* Form Section */
+.form-section {
+  border: none;
+  padding: 0;
+  margin: 0 0 var(--space-8) 0;
+}
+
+.section-legend {
+  font-size: var(--text-lg);
+  font-weight: bold;
+  color: var(--gray-900);
+  margin-bottom: var(--space-6);
+  padding-bottom: var(--space-3);
+  border-bottom: 2px solid var(--gray-200);
+}
+
+/* Form Grid */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: var(--space-6);
+}
+
+.form-group.full-width {
+  grid-column: 1 / -1;
+}
+
+/* Form Group */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.form-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--gray-700);
+}
+
+.form-label.required::after {
+  content: "*";
+  color: var(--danger-red);
+  font-weight: bold;
+  margin-left: var(--space-1);
+}
+
+.optional-badge {
+  display: inline-block;
+  padding: 2px var(--space-2);
+  background-color: var(--gray-200);
+  color: var(--gray-600);
+  font-size: var(--text-xs);
+  font-weight: normal;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+/* Form Input */
+.form-input {
+  width: 100%;
+  height: 44px;
+  padding: var(--space-3) var(--space-4);
+  border: 2px solid var(--gray-200);
+  border-radius: 6px;
+  font-size: var(--text-base);
+  color: var(--gray-900);
+  background-color: white;
+  transition: all 0.2s ease;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: var(--primary-teal);
+  box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.1);
+}
+
+.form-input::placeholder {
+  color: var(--gray-400);
+}
+
+.form-input:disabled {
+  background-color: var(--gray-100);
+  color: var(--gray-500);
+  cursor: not-allowed;
+}
+
+/* Textarea */
+textarea.form-input {
+  height: auto;
+  min-height: 120px;
+  resize: vertical;
+}
+
+/* Select */
+select.form-input {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3E%3C/svg%3E");
+  background-position: right 12px center;
+  background-repeat: no-repeat;
+  background-size: 16px;
+  padding-right: 40px;
+}
+
+/* Input States */
+.form-input.error {
+  border-color: var(--danger-red);
+}
+
+.form-input.success {
+  border-color: var(--success-green);
+}
+
+/* Radio Group */
+.radio-group {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.radio-option {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: var(--space-3) var(--space-4);
+  border: 2px solid var(--gray-200);
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  min-width: 120px;
+}
+
+.radio-option:hover {
+  border-color: var(--primary-teal-light);
+  background-color: #f0fdfa;
+}
+
+.radio-option input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.radio-option input[type="radio"]:checked + .radio-label {
+  color: var(--primary-teal-dark);
+}
+
+.radio-option:has(input:checked) {
+  border-color: var(--primary-teal);
+  background-color: #ccfbf1;
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-base);
+  font-weight: 500;
+  color: var(--gray-700);
+}
+
+.radio-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* Field Help Text */
+.field-help {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--gray-500);
+  font-style: italic;
+}
+
+.help-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--info-blue);
+}
+
+/* Field Error */
+.field-error {
+  display: none;
+  font-size: var(--text-xs);
+  color: var(--danger-red);
+  font-weight: 500;
+}
+
+.field-error:not(:empty) {
+  display: block;
+}
+
+/* Error Summary */
+.error-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background-color: #fee2e2;
+  border-left: 4px solid var(--danger-red);
+  border-radius: 6px;
+  margin-bottom: var(--space-6);
+}
+
+.error-summary:empty {
+  display: none;
+}
+
+.error-summary .alert-icon {
+  width: 24px;
+  height: 24px;
+  color: var(--danger-red);
+  flex-shrink: 0;
+}
+
+.error-title {
+  font-weight: 600;
+  color: #991b1b;
+  margin-bottom: var(--space-2);
+}
+
+.error-list {
+  list-style: disc;
+  padding-left: var(--space-4);
+  margin: 0;
+  font-size: var(--text-sm);
+  color: #991b1b;
+}
+
+/* Form Actions */
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-4);
+  margin-top: var(--space-8);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--gray-200);
+}
+
+/* Patient Context in Header */
+.patient-context {
+  font-size: var(--text-base);
+  font-weight: normal;
+  color: var(--gray-600);
+  margin-left: var(--space-3);
+}
+
+.patient-context::before {
+  content: "—";
+  margin-right: var(--space-2);
+  color: var(--gray-400);
+}
+
+/* DateTime Group */
+.datetime-group {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: var(--space-3);
+}
+
+/* Blood Pressure Group */
+.bp-group {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.bp-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.bp-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--gray-600);
+}
+
+.bp-input {
+  width: 100px;
+}
+
+.bp-separator {
+  font-size: var(--text-2xl);
+  font-weight: bold;
+  color: var(--gray-400);
+  padding-bottom: var(--space-2);
+}
+
+/* Input with Unit */
+.input-with-unit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.unit-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--gray-600);
+  white-space: nowrap;
+}
+
+/* Number Input Stepper Styling */
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Loading State */
+.btn.loading {
+  position: relative;
+  color: transparent;
+  pointer-events: none;
+}
+
+.btn.loading::after {
+  content: "";
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  top: 50%;
+  left: 50%;
+  margin-left: -10px;
+  margin-top: -10px;
+  border: 2px solid transparent;
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 ```
 
-### 11.8 Base Template
+### 11.9 Complete Templates
 
-**Template (templates/base.html):**
+#### 11.9.1 Base Template (templates/base.html)
 
 ```html
+{# templates/base.html #}
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}med-z4{% endblock %}</title>
-    <link rel="stylesheet" href="/static/css/style.css">
-    <link rel="stylesheet" href="/static/css/login.css">
-    <link rel="stylesheet" href="/static/css/dashboard.css">
-    <link rel="stylesheet" href="/static/css/patient_detail.css">
-    <link rel="stylesheet" href="/static/css/forms.css">
-    <script src="/static/js/htmx.min.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}med-z4 Simple EHR{% endblock %}</title>
+
+  {# CSS - Order matters: base styles first #}
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/login.css">
+  <link rel="stylesheet" href="/static/css/dashboard.css">
+  <link rel="stylesheet" href="/static/css/patient_detail.css">
+  <link rel="stylesheet" href="/static/css/forms.css">
+
+  {# HTMX #}
+  <script src="/static/js/htmx.min.js"></script>
+
+  {# Alpine.js (for collapsible sections) #}
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+  {% block extra_head %}{% endblock %}
 </head>
 <body>
-    {% if user %}
-    <header class="app-header">
-        <div class="header-container">
-            <div class="header-left">
-                <a href="/dashboard" class="logo-link">
-                    <span class="logo-text">med-z4</span>
-                    <span class="logo-subtitle">Simple EHR</span>
-                </a>
-            </div>
-            <div class="header-right">
-                <span class="user-info">{{ user.display_name }}</span>
-                <form action="/logout" method="POST" style="display: inline;">
-                    <button type="submit" class="btn btn-sm">Logout</button>
-                </form>
-            </div>
+  {# Header Navigation (only on authenticated pages) #}
+  {% if user %}
+  <header class="app-header">
+    <div class="header-container">
+      <div class="header-left">
+        <a href="/dashboard" class="logo-link">
+          <svg class="logo-icon" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+          </svg>
+          <span class="logo-text">med-z4</span>
+          <span class="logo-subtitle">Simple EHR</span>
+        </a>
+      </div>
+
+      <div class="header-center">
+        {# CCOW Status Badge in Header #}
+        <div
+          id="header-ccow-status"
+          hx-get="/context/status-badge"
+          hx-trigger="load, every 5s"
+          hx-swap="innerHTML"
+        >
+          <span class="ccow-badge ccow-inactive">No Active Context</span>
         </div>
-    </header>
-    {% endif %}
+      </div>
 
-    <main class="main-content">
-        {% block content %}{% endblock %}
-    </main>
+      <div class="header-right">
+        <span class="user-info">
+          <svg class="user-icon" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"/>
+          </svg>
+          {{ user.display_name }}
+        </span>
+        <form action="/logout" method="POST" style="display: inline;">
+          <button type="submit" class="btn btn-sm btn-ghost">
+            <svg class="btn-icon-sm" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M3 3a1 1 0 00-1 1v12a1 1 0 102 0V4a1 1 0 00-1-1zm10.293 9.293a1 1 0 001.414 1.414l3-3a1 1 0 000-1.414l-3-3a1 1 0 10-1.414 1.414L14.586 9H7a1 1 0 100 2h7.586l-1.293 1.293z"/>
+            </svg>
+            Logout
+          </button>
+        </form>
+      </div>
+    </div>
+  </header>
+  {% endif %}
 
-    <footer class="app-footer">
-        <p>med-z4 Simple EHR | CCOW Testing Application</p>
-    </footer>
+  {# Main Content #}
+  <main class="main-content">
+    {% block content %}{% endblock %}
+  </main>
+
+  {# Footer #}
+  <footer class="app-footer">
+    <p>&copy; 2026 med-z4 Simple EHR | CCOW Testing Application</p>
+  </footer>
+
+  {% block extra_scripts %}{% endblock %}
 </body>
 </html>
 ```
 
-### 11.9 Accessibility (508 Compliance)
+#### 11.9.2 Patient Form Template (templates/patient_form.html)
 
-1. **Semantic HTML:** Use `<button>` for actions, `<a>` for navigation
-2. **Keyboard Navigation:** All interactive elements accessible via Tab
-3. **Color Contrast:** WCAG AA standards (4.5:1 for body text)
-4. **ARIA Attributes:** `role="alert"` for errors, `aria-live="polite"` for CCOW updates
+```html
+{# templates/patient_form.html #}
+{% extends "base.html" %}
 
-### 11.10 Component Library
+{% block title %}
+  {% if patient %}Edit Patient{% else %}Add New Patient{% endif %} - med-z4
+{% endblock %}
+
+{% block content %}
+<div class="form-container">
+  <a href="{% if patient %}/patients/{{ patient.icn }}{% else %}/dashboard{% endif %}" class="back-link">
+    <svg viewBox="0 0 20 20" fill="currentColor">
+      <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z"/>
+    </svg>
+    {% if patient %}Back to Patient{% else %}Back to Roster{% endif %}
+  </a>
+
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">
+        {% if patient %}Edit Patient{% else %}Add New Patient{% endif %}
+      </h2>
+    </div>
+
+    <div class="card-body">
+      <form
+        method="POST"
+        action="{% if patient %}/patients/{{ patient.icn }}/edit{% else %}/patients/new{% endif %}"
+        class="patient-form"
+      >
+        {# Error Summary #}
+        <div id="form-errors">
+          {% if errors %}
+          {% include "partials/form_errors.html" %}
+          {% endif %}
+        </div>
+
+        {# Personal Information Section #}
+        <fieldset class="form-section">
+          <legend class="section-legend">Personal Information</legend>
+
+          <div class="form-grid">
+            {# First Name #}
+            <div class="form-group">
+              <label for="first_name" class="form-label required">First Name</label>
+              <input
+                type="text"
+                id="first_name"
+                name="first_name"
+                class="form-input"
+                value="{{ patient.name_first if patient else '' }}"
+                required
+                maxlength="50"
+                autofocus
+                placeholder="Enter first name"
+              >
+              <span class="field-error" id="first_name-error"></span>
+            </div>
+
+            {# Last Name #}
+            <div class="form-group">
+              <label for="last_name" class="form-label required">Last Name</label>
+              <input
+                type="text"
+                id="last_name"
+                name="last_name"
+                class="form-input"
+                value="{{ patient.name_last if patient else '' }}"
+                required
+                maxlength="50"
+                placeholder="Enter last name"
+              >
+              <span class="field-error" id="last_name-error"></span>
+            </div>
+
+            {# Date of Birth #}
+            <div class="form-group">
+              <label for="date_of_birth" class="form-label required">Date of Birth</label>
+              <input
+                type="date"
+                id="date_of_birth"
+                name="date_of_birth"
+                class="form-input"
+                value="{{ patient.dob.strftime('%Y-%m-%d') if patient and patient.dob else '' }}"
+                required
+                max="{{ today.strftime('%Y-%m-%d') }}"
+              >
+              <span class="field-help">Patient must be born before today</span>
+              <span class="field-error" id="date_of_birth-error"></span>
+            </div>
+
+            {# Gender #}
+            <div class="form-group">
+              <label class="form-label required">Gender</label>
+              <div class="radio-group">
+                <label class="radio-option">
+                  <input type="radio" name="gender" value="M"
+                    {% if patient and patient.sex == 'M' %}checked{% endif %} required>
+                  <span class="radio-label">
+                    <svg class="radio-icon" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"/>
+                    </svg>
+                    Male
+                  </span>
+                </label>
+
+                <label class="radio-option">
+                  <input type="radio" name="gender" value="F"
+                    {% if patient and patient.sex == 'F' %}checked{% endif %} required>
+                  <span class="radio-label">
+                    <svg class="radio-icon" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"/>
+                    </svg>
+                    Female
+                  </span>
+                </label>
+
+                <label class="radio-option">
+                  <input type="radio" name="gender" value="O"
+                    {% if patient and patient.sex == 'O' %}checked{% endif %} required>
+                  <span class="radio-label">
+                    <svg class="radio-icon" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"/>
+                    </svg>
+                    Other
+                  </span>
+                </label>
+              </div>
+              <span class="field-error" id="gender-error"></span>
+            </div>
+
+            {# SSN (Optional) #}
+            <div class="form-group">
+              <label for="ssn" class="form-label">
+                Social Security Number
+                <span class="optional-badge">Optional</span>
+              </label>
+              <input
+                type="text"
+                id="ssn"
+                name="ssn"
+                class="form-input"
+                value="{{ patient.ssn if patient and patient.ssn else '' }}"
+                pattern="[0-9]{9}"
+                maxlength="9"
+                placeholder="123456789"
+              >
+              <span class="field-help">
+                <svg class="help-icon" viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"/>
+                </svg>
+                9 digits, no dashes. Will be masked in display (***-**-1234).
+              </span>
+              <span class="field-error" id="ssn-error"></span>
+            </div>
+          </div>
+        </fieldset>
+
+        {# Form Actions #}
+        <div class="form-actions">
+          <a href="{% if patient %}/patients/{{ patient.icn }}{% else %}/dashboard{% endif %}" class="btn btn-outline">
+            Cancel
+          </a>
+          <button type="submit" class="btn btn-primary">
+            {% if patient %}Save Changes{% else %}Create Patient{% endif %}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+```
+
+#### 11.9.3 Patient Detail Template (templates/patient_detail.html)
+
+```html
+{# templates/patient_detail.html #}
+{% extends "base.html" %}
+
+{% block title %}{{ patient.name_display }} - med-z4{% endblock %}
+
+{% block content %}
+<div class="patient-detail-container">
+  {# Back Link #}
+  <a href="/dashboard" class="back-link">
+    <svg viewBox="0 0 20 20" fill="currentColor">
+      <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z"/>
+    </svg>
+    Back to Roster
+  </a>
+
+  {# Active Patient Banner #}
+  <div
+    id="ccow-banner"
+    hx-get="/context/banner"
+    hx-trigger="load, every 5s"
+    hx-swap="outerHTML"
+  >
+    {% include "partials/ccow_banner.html" %}
+  </div>
+
+  {# Patient Demographics Card #}
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Patient Details</h2>
+      <div class="action-buttons">
+        <a href="/patients/{{ patient.icn }}/edit" class="btn btn-sm btn-outline">
+          <svg class="btn-icon-sm" viewBox="0 0 20 20" fill="currentColor">
+            <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/>
+          </svg>
+          Edit
+        </a>
+        <button
+          class="btn btn-sm btn-primary"
+          hx-post="/context/set/{{ patient.icn }}"
+          hx-swap="none"
+          hx-on::after-request="htmx.trigger('#ccow-banner', 'load')"
+        >
+          <svg class="btn-icon-sm" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/>
+          </svg>
+          Set as CCOW
+        </button>
+      </div>
+    </div>
+
+    <div class="card-body">
+      <dl class="detail-list">
+        <div class="detail-item">
+          <dt>Name</dt>
+          <dd class="patient-name">{{ patient.name_display }}</dd>
+        </div>
+        <div class="detail-item">
+          <dt>ICN</dt>
+          <dd class="font-mono">{{ patient.icn }}</dd>
+        </div>
+        <div class="detail-item">
+          <dt>Date of Birth</dt>
+          <dd>
+            {{ patient.dob.strftime('%B %d, %Y') if patient.dob else 'N/A' }}
+            {% if patient.age %}
+            <span class="age-badge">({{ patient.age }} years old)</span>
+            {% endif %}
+          </dd>
+        </div>
+        <div class="detail-item">
+          <dt>Gender</dt>
+          <dd><span class="badge badge-neutral">{{ patient.gender or patient.sex or 'N/A' }}</span></dd>
+        </div>
+        {% if patient.ssn_last4 %}
+        <div class="detail-item">
+          <dt>SSN</dt>
+          <dd class="font-mono">***-**-{{ patient.ssn_last4 }}</dd>
+        </div>
+        {% endif %}
+        {% if patient.source_system %}
+        <div class="detail-item">
+          <dt>Data Source</dt>
+          <dd>
+            <span class="badge {% if patient.source_system == 'med-z4' %}badge-teal{% else %}badge-neutral{% endif %}">
+              {{ patient.source_system }}
+            </span>
+          </dd>
+        </div>
+        {% endif %}
+      </dl>
+    </div>
+  </div>
+
+  {# Clinical Data Section #}
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Clinical Data</h2>
+    </div>
+    <div class="card-body">
+
+      {# Vital Signs Subsection #}
+      <div class="clinical-section" x-data="{ open: true }">
+        <div class="section-header">
+          <button @click="open = !open" class="section-toggle">
+            <svg class="section-icon" :class="{ 'rotate-90': open }" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"/>
+            </svg>
+            <span class="section-title">
+              📊 Vital Signs
+              <span class="count-badge">{{ vitals|length }}</span>
+            </span>
+          </button>
+          <a href="/patients/{{ patient.icn }}/vitals/new" class="btn btn-sm btn-primary">
+            <svg class="btn-icon-sm" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"/>
+            </svg>
+            Add Vital
+          </a>
+        </div>
+
+        <div class="section-content" x-show="open" x-collapse>
+          {% if vitals %}
+          <div class="vitals-list">
+            {% for vital in vitals %}
+            <div class="vital-item">
+              <span class="vital-date">{{ vital.taken_datetime.strftime('%Y-%m-%d %H:%M') }}</span>
+              <span class="vital-reading">BP: {{ vital.systolic }}/{{ vital.diastolic }}</span>
+              <span class="vital-reading">HR: {{ vital.heart_rate }}</span>
+              <span class="vital-reading">Temp: {{ vital.temperature }}°F</span>
+              <div class="vital-actions">
+                <button
+                  class="btn btn-xs btn-danger"
+                  hx-delete="/patients/{{ patient.icn }}/vitals/{{ vital.vital_id }}"
+                  hx-confirm="Delete this vital sign record?"
+                  hx-target="closest .vital-item"
+                  hx-swap="outerHTML swap:1s"
+                >Delete</button>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <p class="empty-hint">No vital signs recorded yet. Click "Add Vital" to create the first entry.</p>
+          {% endif %}
+        </div>
+      </div>
+
+      {# Allergies Subsection #}
+      <div class="clinical-section" x-data="{ open: true }">
+        <div class="section-header">
+          <button @click="open = !open" class="section-toggle">
+            <svg class="section-icon" :class="{ 'rotate-90': open }" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"/>
+            </svg>
+            <span class="section-title">
+              ⚠️ Allergies
+              <span class="count-badge">{{ allergies|length }}</span>
+            </span>
+          </button>
+          <a href="/patients/{{ patient.icn }}/allergies/new" class="btn btn-sm btn-primary">
+            <svg class="btn-icon-sm" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"/>
+            </svg>
+            Add Allergy
+          </a>
+        </div>
+
+        <div class="section-content" x-show="open" x-collapse>
+          {% if allergies %}
+          <div class="allergies-list">
+            {% for allergy in allergies %}
+            <div class="allergy-item {% if allergy.severity == 'SEVERE' %}severe{% endif %}">
+              <div class="allergy-info">
+                <span class="allergen-name">{{ allergy.allergen }}</span>
+                <span class="severity-badge severity-{{ allergy.severity|lower }}">{{ allergy.severity }}</span>
+                <span class="reaction-text">{{ allergy.reactions }}</span>
+              </div>
+              <div class="allergy-actions">
+                <button
+                  class="btn btn-xs btn-danger"
+                  hx-delete="/patients/{{ patient.icn }}/allergies/{{ allergy.allergy_id }}"
+                  hx-confirm="Delete this allergy record?"
+                  hx-target="closest .allergy-item"
+                  hx-swap="outerHTML swap:1s"
+                >Delete</button>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <p class="empty-hint">No allergies recorded. Click "Add Allergy" to document an allergy.</p>
+          {% endif %}
+        </div>
+      </div>
+
+      {# Clinical Notes Subsection #}
+      <div class="clinical-section" x-data="{ open: true }">
+        <div class="section-header">
+          <button @click="open = !open" class="section-toggle">
+            <svg class="section-icon" :class="{ 'rotate-90': open }" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"/>
+            </svg>
+            <span class="section-title">
+              📝 Clinical Notes
+              <span class="count-badge">{{ notes|length }}</span>
+            </span>
+          </button>
+          <a href="/patients/{{ patient.icn }}/notes/new" class="btn btn-sm btn-primary">
+            <svg class="btn-icon-sm" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"/>
+            </svg>
+            Add Note
+          </a>
+        </div>
+
+        <div class="section-content" x-show="open" x-collapse>
+          {% if notes %}
+          <div class="notes-list">
+            {% for note in notes %}
+            <div class="note-item">
+              <div class="note-header">
+                <span class="note-date">{{ note.reference_datetime.strftime('%Y-%m-%d') }}</span>
+                <span class="note-type">{{ note.document_title }}</span>
+                <span class="note-author">by {{ note.author_name }}</span>
+              </div>
+              <p class="note-preview">{{ note.text_preview or (note.document_text[:100] + '...') }}</p>
+              <div class="note-actions">
+                <a href="/patients/{{ patient.icn }}/notes/{{ note.note_id }}" class="btn btn-xs btn-outline">View</a>
+                <button
+                  class="btn btn-xs btn-danger"
+                  hx-delete="/patients/{{ patient.icn }}/notes/{{ note.note_id }}"
+                  hx-confirm="Delete this clinical note?"
+                  hx-target="closest .note-item"
+                  hx-swap="outerHTML swap:1s"
+                >Delete</button>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <p class="empty-hint">No clinical notes recorded. Click "Add Note" to create a note.</p>
+          {% endif %}
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endblock %}
+```
+
+#### 11.9.4 Vital Signs Form Template (templates/vital_form.html)
+
+```html
+{# templates/vital_form.html #}
+{% extends "base.html" %}
+
+{% block title %}Add Vital Signs - {{ patient.name_display }}{% endblock %}
+
+{% block content %}
+<div class="form-container">
+  <a href="/patients/{{ patient.icn }}" class="back-link">
+    <svg viewBox="0 0 20 20" fill="currentColor">
+      <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z"/>
+    </svg>
+    Back to Patient
+  </a>
+
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">
+        Add Vital Signs
+        <span class="patient-context">{{ patient.name_display }}</span>
+      </h2>
+    </div>
+
+    <div class="card-body">
+      <form method="POST" action="/patients/{{ patient.icn }}/vitals/new" class="vitals-form">
+        {# Error Summary #}
+        <div id="form-errors">
+          {% if errors %}{% include "partials/form_errors.html" %}{% endif %}
+        </div>
+
+        <div class="form-grid">
+          {# Vital Date/Time #}
+          <div class="form-group full-width">
+            <label for="vital_date" class="form-label required">Measurement Date/Time</label>
+            <div class="datetime-group">
+              <input type="date" id="vital_date" name="vital_date" class="form-input"
+                value="{{ today.strftime('%Y-%m-%d') }}" max="{{ today.strftime('%Y-%m-%d') }}" required>
+              <input type="time" id="vital_time" name="vital_time" class="form-input"
+                value="{{ now.strftime('%H:%M') if now else '' }}" required>
+            </div>
+          </div>
+
+          {# Blood Pressure #}
+          <div class="form-group full-width">
+            <label class="form-label required">Blood Pressure</label>
+            <div class="bp-group">
+              <div class="bp-input-group">
+                <label for="systolic" class="bp-label">Systolic *</label>
+                <input type="number" id="systolic" name="systolic" class="form-input bp-input"
+                  min="60" max="250" required placeholder="120">
+              </div>
+              <span class="bp-separator">/</span>
+              <div class="bp-input-group">
+                <label for="diastolic" class="bp-label">Diastolic *</label>
+                <input type="number" id="diastolic" name="diastolic" class="form-input bp-input"
+                  min="40" max="150" required placeholder="80">
+              </div>
+              <span class="unit-label">mmHg</span>
+            </div>
+          </div>
+
+          {# Heart Rate #}
+          <div class="form-group">
+            <label for="heart_rate" class="form-label required">Heart Rate</label>
+            <div class="input-with-unit">
+              <input type="number" id="heart_rate" name="heart_rate" class="form-input"
+                min="30" max="250" required placeholder="72">
+              <span class="unit-label">bpm</span>
+            </div>
+          </div>
+
+          {# Temperature #}
+          <div class="form-group">
+            <label for="temperature" class="form-label required">Temperature</label>
+            <div class="input-with-unit">
+              <input type="number" id="temperature" name="temperature" class="form-input"
+                min="95" max="108" step="0.1" required placeholder="98.6">
+              <span class="unit-label">°F</span>
+            </div>
+          </div>
+
+          {# Respiratory Rate #}
+          <div class="form-group">
+            <label for="respiratory_rate" class="form-label">
+              Respiratory Rate <span class="optional-badge">Optional</span>
+            </label>
+            <div class="input-with-unit">
+              <input type="number" id="respiratory_rate" name="respiratory_rate" class="form-input"
+                min="8" max="60" placeholder="16">
+              <span class="unit-label">breaths/min</span>
+            </div>
+          </div>
+
+          {# Oxygen Saturation #}
+          <div class="form-group">
+            <label for="oxygen_saturation" class="form-label">
+              Oxygen Saturation <span class="optional-badge">Optional</span>
+            </label>
+            <div class="input-with-unit">
+              <input type="number" id="oxygen_saturation" name="oxygen_saturation" class="form-input"
+                min="70" max="100" placeholder="98">
+              <span class="unit-label">%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <a href="/patients/{{ patient.icn }}" class="btn btn-outline">Cancel</a>
+          <button type="submit" class="btn btn-primary">Save Vital Signs</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+```
+
+#### 11.9.5 Form Errors Partial (templates/partials/form_errors.html)
+
+```html
+{# templates/partials/form_errors.html #}
+{% if errors %}
+<div class="error-summary">
+  <svg class="alert-icon" viewBox="0 0 20 20" fill="currentColor">
+    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"/>
+  </svg>
+  <div>
+    <p class="error-title">Please correct the following errors:</p>
+    <ul class="error-list">
+      {% for error in errors %}
+      <li>{{ error }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+{% endif %}
+```
+
+### 11.10 HTMX Interaction Patterns (Complete)
+
+This section documents the HTMX patterns used throughout the application for dynamic updates without full page reloads.
+
+#### Pattern 1: CCOW Context Polling
+
+**Use Case**: Auto-refresh CCOW banner every 5 seconds to detect context changes from other applications (e.g., med-z1).
+
+**Implementation**:
+```html
+<div
+  id="ccow-banner"
+  hx-get="/context/banner"
+  hx-trigger="load, every 5s"
+  hx-swap="outerHTML"
+>
+  <!-- Banner content loaded via HTMX -->
+</div>
+```
+
+**Attributes**:
+- `hx-get="/context/banner"`: GET request to fetch updated banner HTML
+- `hx-trigger="load, every 5s"`: Trigger on page load and every 5 seconds
+- `hx-swap="outerHTML"`: Replace entire element (preserves `id` for next poll)
+
+**Backend Route**:
+```python
+@router.get("/context/banner", response_class=HTMLResponse)
+async def get_context_banner(
+    request: Request,
+    user: Dict = Depends(get_current_user)
+):
+    ccow = CCOWClient(session_id=user["session_id"])
+    context = await ccow.get_context()
+    
+    return templates.TemplateResponse(
+        "partials/ccow_banner.html",
+        {"request": request, "context": context, "user": user}
+    )
+```
+
+---
+
+#### Pattern 2: Set CCOW Context (No Page Refresh)
+
+**Use Case**: Set CCOW context when user clicks "Set CCOW" button, refresh banner without full page reload.
+
+**Implementation**:
+```html
+<button
+  class="btn btn-sm btn-primary"
+  hx-post="/context/set/{{ patient.icn }}"
+  hx-swap="none"
+  hx-on::after-request="if(event.detail.successful) { htmx.trigger('#ccow-banner', 'load'); }"
+>
+  Set as CCOW
+</button>
+```
+
+**Attributes**:
+- `hx-post="/context/set/ICN123"`: POST request to set context
+- `hx-swap="none"`: Don't replace button content
+- `hx-on::after-request`: Custom JavaScript after request completes
+- `htmx.trigger('#ccow-banner', 'load')`: Manually trigger banner refresh
+
+**Backend Route**:
+```python
+@router.post("/context/set/{patient_icn}")
+async def set_context(
+    patient_icn: str,
+    user: Dict = Depends(get_current_user)
+):
+    ccow = CCOWClient(session_id=user["session_id"])
+    success = await ccow.set_context(patient_icn, set_by="med-z4")
+    
+    if not success:
+        raise HTTPException(status_code=500, detail="CCOW vault error")
+    
+    return JSONResponse({"success": True, "patient_id": patient_icn})
+```
+
+---
+
+#### Pattern 3: Delete with Confirmation and Animation
+
+**Use Case**: Delete a vital sign record with confirmation dialog and fade-out animation.
+
+**Implementation**:
+```html
+<button
+  class="btn btn-xs btn-danger"
+  hx-delete="/patients/{{ patient.icn }}/vitals/{{ vital.vital_id }}"
+  hx-confirm="Delete this vital sign record?"
+  hx-target="closest .vital-item"
+  hx-swap="outerHTML swap:1s"
+>
+  Delete
+</button>
+```
+
+**Attributes**:
+- `hx-delete="/patients/.../vitals/123"`: DELETE request
+- `hx-confirm="..."`: Browser confirmation dialog before request
+- `hx-target="closest .vital-item"`: Target nearest ancestor with class `vital-item`
+- `hx-swap="outerHTML swap:1s"`: Replace element with 1-second transition
+
+**Backend Route**:
+```python
+@router.delete("/patients/{icn}/vitals/{vital_id}")
+async def delete_vital(
+    icn: str,
+    vital_id: int,
+    user: Dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    # Delete vital from database
+    await db.execute(
+        delete(PatientVital).where(PatientVital.vital_id == vital_id)
+    )
+    await db.commit()
+    
+    # Return empty response (HTMX will remove element)
+    return Response(status_code=200, content="")
+```
+
+**CSS for Fade Animation**:
+```css
+.vital-item {
+  transition: opacity 1s ease-out;
+}
+
+.vital-item.htmx-swapping {
+  opacity: 0;
+}
+```
+
+---
+
+#### Pattern 4: Form Validation with Error Display
+
+**Use Case**: Submit form via HTMX, display server-side validation errors inline without full page reload.
+
+**Implementation**:
+```html
+<form
+  method="POST"
+  action="/patients/new"
+  hx-post="/patients/new"
+  hx-target="#form-errors"
+  hx-swap="innerHTML"
+>
+  <div id="form-errors"></div>
+  
+  <div class="form-group">
+    <label for="first_name" class="form-label required">First Name</label>
+    <input type="text" id="first_name" name="first_name" class="form-input" required>
+  </div>
+  
+  <!-- More fields... -->
+  
+  <button type="submit" class="btn btn-primary">Create Patient</button>
+</form>
+```
+
+**Backend Route (Success)**:
+```python
+@router.post("/patients/new")
+async def create_patient(
+    request: Request,
+    first_name: str = Form(...),
+    last_name: str = Form(...),
+    date_of_birth: date = Form(...),
+    gender: str = Form(...),
+    user: Dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    # Validation passed, create patient
+    icn = await generate_unique_icn(db)
+    patient = PatientDemographics(
+        patient_key=icn,
+        icn=icn,
+        name_first=first_name,
+        name_last=last_name,
+        dob=date_of_birth,
+        sex=gender,
+        source_system="med-z4"
+    )
+    db.add(patient)
+    await db.commit()
+    
+    # Redirect to patient detail page
+    return RedirectResponse(url=f"/patients/{icn}", status_code=303)
+```
+
+**Backend Route (Validation Error)**:
+```python
+@router.post("/patients/new")
+async def create_patient(request: Request, ...):
+    errors = []
+    
+    if not first_name:
+        errors.append("First name is required")
+    if not last_name:
+        errors.append("Last name is required")
+    
+    if errors:
+        # Return error HTML fragment (HTMX will inject into #form-errors)
+        return templates.TemplateResponse(
+            "partials/form_errors.html",
+            {"request": request, "errors": errors},
+            status_code=422
+        )
+    
+    # ... create patient
+```
+
+---
+
+#### Pattern 5: Out-of-Band Swaps (Multiple Updates)
+
+**Use Case**: Update multiple page sections from a single HTMX request (e.g., update patient count AND table after creating new patient).
+
+**Implementation**:
+```html
+<div id="patient-table" hx-target="this" hx-swap="outerHTML">
+  <!-- Table content -->
+</div>
+
+<div id="patient-count">
+  Total: <span>4</span>
+</div>
+```
+
+**Backend Route**:
+```python
+@router.post("/patients/quick-add")
+async def quick_add_patient(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    # Create patient...
+    
+    # Get updated data
+    result = await db.execute(select(PatientDemographics))
+    patients = result.scalars().all()
+    
+    # Render main table
+    table_html = templates.TemplateResponse(
+        "partials/patient_table.html",
+        {"request": request, "patients": patients}
+    ).body.decode()
+    
+    # Render OOB count update
+    count_html = f'<div id="patient-count" hx-swap-oob="true">Total: <span>{len(patients)}</span></div>'
+    
+    return HTMLResponse(table_html + count_html)
+```
+
+**Learning Note**: `hx-swap-oob="true"` tells HTMX to update elements with matching IDs anywhere on the page, not just the target element.
+
+---
+
+#### Pattern 6: Lazy Loading Content
+
+**Use Case**: Load clinical notes only when user expands the notes section (reduces initial page load).
+
+**Implementation**:
+```html
+<div class="clinical-section" x-data="{ open: false, loaded: false }">
+  <div class="section-header">
+    <button 
+      @click="open = !open; if(!loaded) { $refs.notesContent.dispatchEvent(new Event('load-notes')); loaded = true; }"
+      class="section-toggle"
+    >
+      📝 Clinical Notes
+    </button>
+  </div>
+  
+  <div 
+    x-ref="notesContent"
+    x-show="open" 
+    hx-get="/patients/{{ patient.icn }}/notes"
+    hx-trigger="load-notes"
+    hx-swap="innerHTML"
+  >
+    <p class="loading">Loading notes...</p>
+  </div>
+</div>
+```
+
+**Explanation**:
+- Notes are not loaded on initial page render
+- When user clicks to expand, Alpine.js dispatches `load-notes` event
+- HTMX listens for this event and fetches notes
+- `loaded` flag prevents re-fetching on subsequent toggles
+
+---
+
+### 11.11 UI/UX Best Practices
+
+#### Accessibility (508 Compliance)
+
+1. **Semantic HTML**:
+   - Use `<button>` for actions, `<a>` for navigation
+   - Proper heading hierarchy (`<h1>` → `<h2>` → `<h3>`)
+   - `<label>` elements with `for` attribute for all form inputs
+
+2. **Keyboard Navigation**:
+   - All interactive elements accessible via Tab key
+   - Visible focus states (teal outline)
+   - Skip links for screen readers
+
+3. **Color Contrast**:
+   - All text meets WCAG AA standards (4.5:1 for body text, 3:1 for large text)
+   - Never rely on color alone (use icons + text)
+
+4. **ARIA Attributes** (when needed):
+   - `role="alert"` for error messages
+   - `aria-label` for icon-only buttons
+   - `aria-live="polite"` for CCOW status updates
+
+#### Performance Considerations
+
+1. **HTMX Polling**:
+   - Limit polling to 5-second intervals (balance freshness vs. server load)
+   - Use `hx-swap="outerHTML"` to avoid memory leaks
+   - Cache CCOW responses for 1-2 seconds on backend
+
+2. **Image/Icon Strategy**:
+   - Inline SVG for icons (better than icon fonts)
+   - No external dependencies beyond HTMX and Alpine.js
+
+3. **CSS Organization**:
+   - Separate CSS files per page type (login, dashboard, forms)
+   - Common styles in `style.css`
+   - CSS variables for theme consistency
+
+#### Responsive Design
+
+1. **Breakpoints**:
+   - Mobile: < 640px (single column, stacked buttons)
+   - Tablet: 640px - 1024px (2-column grid where appropriate)
+   - Desktop: > 1024px (full layout)
+
+2. **Mobile-Specific Adjustments**:
+   - Larger touch targets (44px minimum)
+   - Horizontal scroll for wide tables
+   - Collapsible navigation
+
+#### Error Handling UX
+
+1. **Form Validation**:
+   - Client-side: HTML5 `required`, `pattern`, `min`, `max`
+   - Server-side: FastAPI validation with clear error messages
+   - Display: Error summary at top + inline field errors
+
+2. **Network Errors**:
+   - HTMX error handling via `hx-on::error`
+   - Show user-friendly message on network failure
+   - Auto-retry for polling requests
+
+3. **CCOW Errors**:
+   - Display "Vault Offline" status
+   - Allow manual refresh
+   - Graceful degradation (app works without CCOW)
+
+### 11.12 Component Library
 
 Reusable components available:
 - Buttons (`.btn`, `.btn-primary`, `.btn-sm`, `.btn-danger`)
@@ -2609,7 +4081,179 @@ Reusable components available:
 - Tables with striped rows
 - CCOW banner and debug panel
 
+#### CCOW Debug Panel
+
+**Purpose:** Show CCOW vault status and context details for debugging during development. Displays in the bottom-right corner of the screen.
+
+**Route:** `GET /context/debug` (HTMX partial, polled every 5 seconds)
+
+**Template (templates/partials/ccow_debug_panel.html):**
+
+```html
+{# templates/partials/ccow_debug_panel.html #}
+{# CCOW debug panel (optional, bottom-right corner) #}
+
+<div id="ccow-debug-panel" class="ccow-debug-panel"
+     hx-get="/context/debug"
+     hx-trigger="load, every 5s"
+     hx-swap="outerHTML">
+    <div class="debug-header">CCOW Status</div>
+    <div class="debug-row">
+        <span class="debug-label">Vault:</span>
+        <span class="debug-value">
+            {% if vault_healthy %}
+                <span class="status-indicator online"></span> Online
+            {% else %}
+                <span class="status-indicator offline"></span> Offline
+            {% endif %}
+        </span>
+    </div>
+    <div class="debug-row">
+        <span class="debug-label">Context ID:</span>
+        <span class="debug-value">
+            {% if context and context.patient_id %}
+                {{ context.patient_id }}
+            {% else %}
+                None
+            {% endif %}
+        </span>
+    </div>
+    <div class="debug-row">
+        <span class="debug-label">Set By:</span>
+        <span class="debug-value">
+            {% if context and context.set_by %}
+                {{ context.set_by }}
+            {% else %}
+                —
+            {% endif %}
+        </span>
+    </div>
+    <div class="debug-row">
+        <span class="debug-label">Last Sync:</span>
+        <span class="debug-value">
+            <span id="sync-timestamp">Just now</span>
+        </span>
+    </div>
+</div>
+```
+
+**CSS (add to static/css/style.css):**
+
+```css
+/* CCOW Debug Panel */
+.ccow-debug-panel {
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    background: white;
+    border: 2px solid var(--primary-teal);
+    border-radius: 8px;
+    padding: 1rem;
+    font-size: var(--text-sm);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    min-width: 250px;
+    z-index: 1000;
+}
+
+.debug-header {
+    font-weight: 600;
+    color: var(--primary-teal);
+    margin-bottom: 0.75rem;
+    border-bottom: 1px solid var(--gray-200);
+    padding-bottom: 0.5rem;
+}
+
+.debug-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.25rem 0;
+}
+
+.debug-label {
+    color: var(--gray-500);
+    font-weight: 500;
+}
+
+.debug-value {
+    color: var(--gray-900);
+    font-family: 'Courier New', monospace;
+}
+
+.status-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 0.25rem;
+    vertical-align: middle;
+}
+
+.status-indicator.online {
+    background-color: var(--success-green);
+}
+
+.status-indicator.offline {
+    background-color: var(--danger-red);
+}
+```
+
+**Route Handler (add to app/routes/context.py):**
+
+```python
+@router.get("/debug", response_class=HTMLResponse)
+async def get_ccow_debug_panel(
+    request: Request,
+    user: Dict = Depends(get_current_user)
+):
+    """
+    Get CCOW debug panel (HTMX partial).
+
+    GET /context/debug
+
+    Returns HTML fragment showing CCOW vault status and current context.
+    Polled every 5 seconds for real-time updates.
+    """
+    ccow = CCOWClient(session_id=user["session_id"])
+    context = await ccow.get_context()
+    vault_healthy = await ccow.health_check()
+
+    return templates.TemplateResponse("partials/ccow_debug_panel.html", {
+        "request": request,
+        "context": context,
+        "vault_healthy": vault_healthy,
+        "user": user,
+    })
+```
+
+**Usage in Dashboard (add to templates/dashboard.html before closing `{% endblock %}`):**
+
+```html
+{# CCOW Debug Panel (optional, bottom-right corner) #}
+<div id="ccow-debug-panel"
+     hx-get="/context/debug"
+     hx-trigger="load, every 5s"
+     hx-swap="outerHTML">
+    {% include "partials/ccow_debug_panel.html" %}
+</div>
+```
+
+**Template Variables:**
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `vault_healthy` | bool | True if CCOW vault health check passed |
+| `context` | dict \| None | Current CCOW context (patient_id, set_by) |
+| `user` | dict | Current user info |
+
+**Verification:**
+- Debug panel appears in bottom-right corner of dashboard
+- Shows "Online" with green indicator when vault is running
+- Shows "Offline" with red indicator when vault is stopped
+- Context ID updates when patient is selected
+- Panel refreshes every 5 seconds via HTMX polling
+
 ---
+
 
 ## 12. Testing Strategy
 
@@ -2926,6 +4570,13 @@ curl -X PUT \
 | Variable | Type | Description |
 |----------|------|-------------|
 | `context` | dict \| None | Current CCOW context |
+| `user` | dict | Current user info |
+
+### partials/ccow_debug_panel.html
+| Variable | Type | Description |
+|----------|------|-------------|
+| `vault_healthy` | bool | True if CCOW vault health check passed |
+| `context` | dict \| None | Current CCOW context (patient_id, set_by) |
 | `user` | dict | Current user info |
 
 ---

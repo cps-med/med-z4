@@ -1,46 +1,18 @@
-# med-z4 (Simple EHR) – Design Specification
+# Med-Z4 (Simple EHR) Application Design
 
-**Document Version:** v2.0 (Restructured)  
+**Document Version:** v1.0  
 **Date:** January 22, 2026  
 **Repository:** `med-z4`  
-**Status:** Final Design - Ready for Implementation  
+**Status:** Ready for Implementation  
 **Author:** Chuck Sylvester  
 
 ---
 
 ## Document Purpose
 
-This comprehensive design specification provides complete technical guidance for implementing med-z4, a standalone "Simple EHR" application that serves as a CCOW participant and clinical data management tool for the med-z1 ecosystem.
+This design specification provides technical guidance for implementing med-z4, a standalone "Simple EHR" application that serves as a CCOW participant and clinical data management tool for the med-z1 ecosystem.
 
-**Target Audience:** Developers implementing med-z4 from scratch with educational explanations for learning FastAPI, HTMX, PostgreSQL, and CCOW patterns.
-
-**Scope:** This document covers Phases 1-8 implementation (authentication, CCOW integration, patient roster, CRUD operations for clinical data).
-
----
-
-## Table of Contents
-
-1. [Executive Summary](#1-executive-summary)
-2. [System Architecture](#2-system-architecture)
-3. [Repository Structure](#3-repository-structure)
-4. [Configuration Management](#4-configuration-management)
-5. [Database Design & Schema Sharing](#5-database-design--schema-sharing)
-6. [Authentication Design](#6-authentication-design)
-7. [CCOW Context Management](#7-ccow-context-management)
-8. [Core Features (Phase 1-5)](#8-core-features-phase-1-5)
-9. [Clinical Data Management (CRUD) - Phase 6-8](#9-clinical-data-management-crud---phase-6-8)
-10. [Implementation Roadmap](#10-implementation-roadmap)
-11. [UI/UX Design & Wireframes](#11-uiux-design--wireframes)
-12. [Testing Strategy](#12-testing-strategy)
-13. [Known Limitations & Future Enhancements](#13-known-limitations--future-enhancements)
-14. [Deployment Considerations](#14-deployment-considerations)
-15. [References](#15-references)
-16. [Glossary](#16-glossary)
-
-**Appendices:**
-- [Appendix A: Quick Reference Commands](#appendix-a-quick-reference-commands)
-- [Appendix B: Troubleshooting Guide](#appendix-b-troubleshooting-guide)
-- [Appendix C: Template Variable Reference](#appendix-c-template-variable-reference)
+This document covers Phases 1-8 implementation (authentication, CCOW integration, patient roster, CRUD operations for clinical data). For more information on the implementation roadmap, refer to docs/spec/med-z4-roadmap.md.
 
 ---
 
@@ -48,22 +20,11 @@ This comprehensive design specification provides complete technical guidance for
 
 ### 1.1 Purpose
 
-**med-z4** is a standalone "Simple EHR" application designed to simulate a primary Electronic Health Record system. Its role in the med-z1 ecosystem is to act as a **CCOW Participant** that validates multi-application patient context synchronization with the med-z1 longitudinal viewer.
+med-z4 is a standalone "Simple EHR" application designed to simulate a primary Electronic Health Record system. Its role in the med-z1 ecosystem is to act as a CCOW Participant that validates multi-application patient context synchronization with the med-z1 longitudinal viewer.
 
 Unlike med-z1 (which is a specialized read-only viewer), med-z4 simulates the "source of truth" workflow where a clinician actively manages patient data. It demonstrates that when a user changes patients in med-z4, the context automatically propagates to med-z1 via the central CCOW Context Vault, and vice versa.
 
-**Key Distinction:** med-z4 is both a **context driver** (setting patient context) and a **data factory** (creating/editing clinical data directly in the PostgreSQL serving database).
-
-### 1.2 Design Philosophy
-
-This design specification follows a **production-ready, learning-focused approach**:
-
-- **Production-Ready:** Full password authentication, secure session management, proper database transactions, error handling
-- **Educational:** Extensive technical explanations, learning notes, and implementation guidance for developers new to FastAPI/HTMX/PostgreSQL patterns
-- **Incremental:** Clear phased implementation (Phases 1-8) from foundation to full CRUD capabilities
-- **Self-Sufficient:** Separate repository with independent configuration, avoiding complex dependencies on med-z1 codebase
-
-### 1.3 Key Objectives
+### 1.2 Key Objectives
 
 1. **Repository Isolation:** Operate as a completely self-sufficient application in the `med-z4` repository
 2. **Shared Identity:** Connect to the existing med-z1 PostgreSQL database (`medz1`) to utilize the same `auth` and `clinical` schemas
@@ -72,7 +33,7 @@ This design specification follows a **production-ready, learning-focused approac
 5. **Clinical Data Management:** CRUD operations for patients, vitals, allergies, notes, and other clinical domains
 6. **Visual Distinction:** Teal/Emerald theme to clearly differentiate from med-z1's Blue/Slate theme
 
-### 1.4 Success Criteria
+### 1.3 Success Criteria
 
 **Phase 1-5 (CCOW Context Synchronization):**
 - User can log into both med-z1 and med-z4 with separate sessions
@@ -160,29 +121,26 @@ The med-z4 application operates alongside med-z1 as a peer CCOW participant, sha
 
 | Component | Configuration | Description |
 |-----------|--------------|-------------|
-| **Service Port** | `8005` | Distinct from med-z1 (8000), CCOW Vault (8001), VistA RPC Broker (8003) |
-| **Database Host** | `localhost:5432` | Shared PostgreSQL instance running in Docker |
-| **Database Name** | `medz1` | Same database as med-z1 (shared schemas) |
-| **Database User** | `postgres` | Shared credential (from `.env` file) |
-| **CCOW Vault URL** | `http://localhost:8001` | Targets existing CCOW Context Vault service |
-| **Session Cookie Name** | `med_z4_session_id` | **Different from med-z1** to enable independent sessions |
+| **Service Port** | 8005 | Distinct from med-z1 (8000), CCOW Vault (8001), VistA RPC Broker (8003) |
+| **Database Host** | localhost:5432 | Shared PostgreSQL instance running in Docker |
+| **Database Name** | medz1 | Same database as med-z1 (shared schemas) |
+| **Database User** | postgres | Shared credential (from `.env` file) |
+| **CCOW Vault URL** | http://localhost:8001 | Targets existing CCOW Context Vault service |
+| **Session Cookie Name** | med_z4_session_id | Different from med-z1 to enable independent sessions |
 | **Session Timeout** | 25 minutes | Matches med-z1 default (configurable) |
-| **Cookie Security** | `HttpOnly=True`, `SameSite=Lax` | Production-ready security settings |
+| **Cookie Security** | HttpOnly=True, SameSite=Lax | Production-ready security settings |
 
-**Key Decision: Separate Session Cookies**
+**Key Decision: Separate Session Cookies**  
+med-z4 uses a different session cookie name (med_z4_session_id) than med-z1 (session_id) for the following reasons:
 
-med-z4 uses a **different session cookie name** (`med_z4_session_id`) than med-z1 (`session_id`) for the following reasons:
-
-1. **Independent Testing:** Allows a user to log into both applications simultaneously with different user accounts (useful for testing multi-user CCOW scenarios)
-2. **Session Isolation:** Prevents accidental session conflicts or overwrites
-3. **Production Realism:** Simulates real-world scenario where different EHR systems maintain separate sessions
-4. **Security:** Each application validates its own sessions independently
-
-**Trade-off:** User must log in separately to each application. This is acceptable and realistic for enterprise healthcare systems.
+- **Independent Testing:** Allows user to log into both applications simultaneously with different user accounts
+- **Session Isolation:** Prevents accidental session conflicts or overwrites
+- **Production Realism:** Simulates real-world scenario where different EHR systems maintain separate sessions
+- **Security:** Each application validates its own sessions independently
 
 ### 2.3 Technology Stack
 
-med-z4 uses the **exact same technology stack** as med-z1 for consistency and learning transfer:
+med-z4 uses the exact same technology stack as med-z1 for consistency and learning transfer:
 
 | Layer | Technology | Version | Purpose |
 |-------|-----------|---------|---------|
@@ -197,7 +155,7 @@ med-z4 uses the **exact same technology stack** as med-z1 for consistency and le
 | **HTTP Client** | httpx | Latest | CCOW Vault communication |
 | **ASGI Server** | Uvicorn | Latest | Development server with hot reload |
 
-**Learning Note: Why This Stack?**
+**Why This Stack?**
 
 - **FastAPI:** Modern, fast, automatic API documentation, type hints, async support
 - **Jinja2:** Mature templating with inheritance, macros, filters (Django-like syntax)
@@ -206,31 +164,11 @@ med-z4 uses the **exact same technology stack** as med-z1 for consistency and le
 - **SQLAlchemy:** Industry-standard Python ORM with raw SQL support when needed
 - **bcrypt:** Industry-standard password hashing (slow by design to resist brute-force attacks)
 
-### 2.4 Async vs Sync Decision
-
-**This specification uses async SQLAlchemy patterns** for consistency with modern FastAPI best practices:
-
-```python
-# ✅ Standard pattern used throughout this specification
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-
-async def get_patient(db: AsyncSession, icn: str):
-    result = await db.execute(
-        select(PatientDemographics).where(PatientDemographics.patient_key == icn)
-    )
-    return result.scalar_one_or_none()
-```
-
-**Rationale:**
-- Async patterns handle concurrent requests more efficiently
-- Better alignment with FastAPI's async-first design
-- Consistent with CCOW client operations (httpx async)
-
 ---
 
-## 3. Repository Structure
+### 2.3 Repository Structure
 
-med-z4 follows a **flat, simple structure** optimized for learning and rapid development:
+med-z4 follows a flat, simple structure, as shown below:
 
 ```text
 med-z4/
@@ -246,61 +184,61 @@ med-z4/
 │   ├── guide/                          # Developer setup and other guides
 │   └── spec/                           # Design specifications
 │
-├── app/                                # Application code (models, routes, services)
-│   ├── __init__.py
-│   │
-│   ├── models/                         # Database models (SQLAlchemy/Pydantic)
-│   │   ├── __init__.py
-│   │   ├── auth.py                     # User, Session models (matches med-z1 auth schema)
-│   │   └── clinical.py                 # Clinical models (Patient, Vital, Allergy, Note)
-│   │
-│   ├── routes/                         # FastAPI route handlers (endpoints)
-│   │   ├── __init__.py
-│   │   ├── auth.py                     # Login, logout, session management
-│   │   ├── dashboard.py                # Patient roster, dashboard
-│   │   ├── context.py                  # CCOW context operations (get/set/clear)
-│   │   └── crud.py                     # Patient/clinical data CRUD operations (Phase 6+)
-│   │
-│   ├── services/                       # Business logic layer
-│   │   ├── __init__.py
-│   │   ├── auth_service.py             # Password verification, session creation
-│   │   ├── ccow_client.py              # CCOW Vault HTTP client
-│   │   ├── patient_service.py          # Patient data operations (Phase 6+)
-│   │   └── audit_service.py            # Clinical audit logging
-│   │
-│   └── middleware/                     # Custom middleware (if needed)
-│       └── __init__.py
-│
-├── templates/                          # Jinja2 HTML templates
-│   ├── base.html                       # Base layout with Teal theme
-│   ├── login.html                      # Login form with password input
-│   ├── dashboard.html                  # Patient roster table
-│   ├── patient_form.html               # New/edit patient form (Phase 6+)
-│   ├── patient_detail.html             # Patient detail page with tabs (Phase 6+)
-│   │
-│   └── partials/                       # HTMX partial templates (fragments)
-│       ├── patient_row.html            # Single patient table row
-│       ├── ccow_banner.html            # Top banner with active patient
-│       ├── ccow_debug_panel.html       # CCOW status widget
-│       └── forms/                      # Reusable form components (Phase 6+)
-│           ├── vital_form.html
-│           ├── allergy_form.html
-│           └── note_form.html
-│
-└── static/                             # Static assets (CSS, JS, images)
-    ├── css/
-    │   ├── style.css                   # Base styles and CSS variables
-    │   ├── login.css                   # Login page styles
-    │   ├── dashboard.css               # Dashboard/roster styles
-    │   ├── patient_detail.css          # Patient detail page styles
-    │   └── forms.css                   # Form styles
-    ├── js/
-    │   └── htmx.min.js                 # HTMX library (1.9.x)
-    └── images/
-        └── logo-teal.png               # med-z4 logo, favicon, and other images
+└── app/                                # Application code (models, routes, services)
+    ├── __init__.py
+    │
+    ├── models/                         # Database models (SQLAlchemy/Pydantic)
+    │   ├── __init__.py
+    │   ├── auth.py                     # User, Session models (matches med-z1 auth schema)
+    │   └── clinical.py                 # Clinical models (Patient, Vital, Allergy, Note)
+    │
+    ├── routes/                         # FastAPI route handlers (endpoints)
+    │   ├── __init__.py
+    │   ├── auth.py                     # Login, logout, session management
+    │   ├── dashboard.py                # Patient roster, dashboard
+    │   ├── context.py                  # CCOW context operations (get/set/clear)
+    │   └── crud.py                     # Patient/clinical data CRUD operations (Phase 6+)
+    │
+    ├── services/                       # Business logic layer
+    │   ├── __init__.py
+    │   ├── auth_service.py             # Password verification, session creation
+    │   ├── ccow_client.py              # CCOW Vault HTTP client
+    │   ├── patient_service.py          # Patient data operations (Phase 6+)
+    │   └── audit_service.py            # Clinical audit logging
+    │
+    ├── templates/                      # Jinja2 HTML templates
+    │   ├── base.html                   # Base layout with Teal theme
+    │   ├── login.html                  # Login form with password input
+    │   ├── dashboard.html              # Patient roster table
+    │   ├── patient_form.html           # New/edit patient form (Phase 6+)
+    │   ├── patient_detail.html         # Patient detail page with tabs (Phase 6+)
+    │   │
+    │   └── partials/                   # HTMX partial templates (fragments)
+    │       ├── patient_row.html        # Single patient table row
+    │       ├── ccow_banner.html        # Top banner with active patient
+    │       ├── ccow_debug_panel.html   # CCOW status widget
+    │       └── forms/                  # Reusable form components (Phase 6+)
+    │           ├── vital_form.html
+    │           ├── allergy_form.html
+    │           └── note_form.html
+    │
+    ├── middleware/                     # Custom middleware (if needed)
+    │   └── __init__.py
+    │
+    └── static/                             # Static assets (CSS, JS, images)
+        ├── css/
+        │   ├── style.css                   # Base styles and CSS variables
+        │   ├── login.css                   # Login page styles
+        │   ├── dashboard.css               # Dashboard/roster styles
+        │   ├── patient_detail.css          # Patient detail page styles
+        │   └── forms.css                   # Form styles
+        ├── js/
+        │   └── htmx.min.js                 # HTMX library (1.9.x)
+        └── images/
+            └── logo-teal.png               # med-z4 logo, favicon, and other images
 ```
 
-**Learning Note: Directory Structure Rationale**
+**Directory Structure Rationale**
 
 - **Flat Structure:** Easier to navigate for learning (vs. deeply nested packages)
 - **models/:** Separates database models from business logic (Single Responsibility Principle)
@@ -309,9 +247,7 @@ med-z4/
 - **templates/partials/:** HTMX pattern - small HTML fragments for dynamic updates
 - **static/:** Public assets served directly by FastAPI StaticFiles middleware
 
-**Python Module Imports:**
-
-With this structure, imports look like:
+With this structure, python module imports look like:
 ```python
 from app.models.auth import User, Session
 from app.services.auth_service import verify_password, create_session
@@ -320,13 +256,53 @@ from app.services.ccow_client import CCOWClient
 
 ---
 
-## 4. Configuration Management
+## 3. Configuration Management
 
-### 4.1 Environment Variables (.env)
+**3.1 Create and Clone Repository**
 
-The `.env` file stores all configuration and secrets. **Never commit this file to Git.**
+- Create `med-z4` GitHub repository
+- Clone locally into `~/swdev/med` directory
 
-**Template (.env.example):**
+**3.2 Create initial requirements.txt with pinned versions**  
+
+```bash
+# Initial set
+fastapi==0.123.9
+uvicorn==0.38.0
+Jinja2==3.1.6
+python-multipart==0.0.20
+SQLAlchemy==2.0.36
+psycopg2-binary==2.9.11
+bcrypt==4.2.1
+httpx==0.28.1
+python-dotenv==1.2.1
+
+# More to be added later...
+```
+
+**3.3 Create and prepare virtual environment**
+```bash
+# Create virtual environment
+python3 -m venv .venv
+
+# Activate virtual environment
+source .venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Verify installation
+pip list
+
+# To deactivate virtual environment
+deactivate
+```
+
+**3.4 Environment Variables (.env)**
+
+The `.env` file stores all configuration and secrets. Never commit this file to Git.
+
+**Template (.env example):**
 
 ```bash
 # ---------------------------------------------------------------------
@@ -360,17 +336,9 @@ BCRYPT_ROUNDS=12  # Password hashing cost factor (12 = ~300ms per hash)
 LOG_LEVEL=INFO
 ```
 
-**Learning Note: Environment Variable Best Practices**
-
-- **Never hardcode secrets:** Database passwords, session keys must be in `.env`
-- **Use .env.example:** Commit a template with placeholder values for documentation
-- **Prefix by concern:** Group related settings (SESSION_*, POSTGRES_*, CCOW_*)
-- **Document units:** `SESSION_TIMEOUT_MINUTES` is clear (vs. ambiguous `SESSION_TIMEOUT`)
-- **Separate by environment:** Use `.env.dev`, `.env.prod` for different deployments
-
 ### 4.2 Configuration Loader (config.py)
 
-Centralized configuration module that loads and validates environment variables:
+Centralized configuration module (in project root folder) that loads and validates environment variables.
 
 ```python
 # config.py
@@ -442,13 +410,13 @@ BCRYPT_ROUNDS = int(os.getenv("BCRYPT_ROUNDS", "12"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 ```
 
-**Learning Note: Configuration Pattern**
+**Configuration Pattern**
 
-1. **Fail Fast:** Raise errors on startup if required config is missing (don't fail later during runtime)
-2. **Type Conversion:** Convert strings to int/bool where needed (`int(os.getenv(...))`)
-3. **Sensible Defaults:** Provide defaults for non-sensitive settings (port, timeout)
-4. **Validation:** Check constraints (e.g., secret key length) before app starts
-5. **Single Import:** Other modules import from `config` (not `os.getenv` scattered everywhere)
+- **Fail Fast:** Raise errors on startup if required config is missing (don't fail later during runtime)
+- **Type Conversion:** Convert strings to int/bool where needed (`int(os.getenv(...))`)
+- **Sensible Defaults:** Provide defaults for non-sensitive settings (port, timeout)
+- **Validation:** Check constraints (e.g., secret key length) before app starts
+- **Single Import:** Other modules import from `config` (not `os.getenv` scattered everywhere)
 
 ---
 
@@ -5032,3 +5000,5 @@ curl -X PUT \
 ---
 
 **End of Design Specification**
+
+
