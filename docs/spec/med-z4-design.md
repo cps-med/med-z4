@@ -551,7 +551,7 @@ med-z4 **does not create its own database or schemas**. It operates as a client 
 | `reference` | **Read-Only** | Reference data (CVX vaccine codes, etc.) |
 | `public` | **No Access** | AI checkpoint tables (LangGraph, not used by med-z4) |
 
-**Learning Note: Why Share a Database?**
+**Why Share a Database?**
 
 This pattern simulates real enterprise healthcare IT:
 - Multiple applications (CPRS, VistA, JLV, med-z1) query the same data warehouse
@@ -654,7 +654,7 @@ async def get_db_context() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 ```
 
-**Learning Note: SQLAlchemy Async Pattern**
+**SQLAlchemy Async Pattern**
 
 - **Engine (Singleton):** Created once at module import, reused for all connections
 - **AsyncSessionLocal (Factory):** Creates new AsyncSession objects for each request
@@ -2667,7 +2667,9 @@ Create `app/templates/admin/test.html` with your existing test buttons.
 
 Access at: http://localhost:8005/admin/test
 
-**Option 2: Dashboard Footer Widget**
+**Option 2: Dashboard Footer Widget**  
+
+_(this option was selected for implementation)_  
 
 Add health check buttons to dashboard footer:
 
@@ -3382,7 +3384,8 @@ This displays the user right-justified in the navigation header across all pages
 2. **Test login with database user:**
    - Navigate to http://localhost:8005
    - Should redirect to `/login`
-   - Enter: `test@example.com` / `password123`
+   - Enter valid user credentials from medz2 database, e.g.:
+      - `clinician.alpha@va.gov` | `VaDemo2025!`
    - Should redirect to `/dashboard`
 
 3. **Verify session in database:**
