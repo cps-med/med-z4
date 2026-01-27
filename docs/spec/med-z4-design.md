@@ -12,7 +12,7 @@
 
 This design specification provides technical guidance for implementing med-z4, a standalone "Simple EHR" application that serves as a CCOW participant and clinical data management tool for the med-z1 ecosystem.
 
-This document covers Phases 1-8 implementation (authentication, CCOW integration, patient roster, CRUD operations for clinical data). For more information on the implementation roadmap, refer to docs/spec/med-z4-roadmap.md.
+This document covers Phases 1-8 implementation (authentication, CCOW integration, patient roster, CRUD operations for clinical data), including a complete implementation roadmap with code examples in Section 10.
 
 ---
 
@@ -263,19 +263,22 @@ from app.services.ccow_client import CCOWClient
 - Create `med-z4` GitHub repository
 - Clone locally into `~/swdev/med` directory
 
-**3.2 Create initial requirements.txt with pinned versions**  
+**3.2 Create initial requirements.txt with pinned versions**
 
 ```bash
 # Initial set
 fastapi==0.123.9
-uvicorn==0.38.0
+uvicorn[standard]==0.38.0
 Jinja2==3.1.6
 python-multipart==0.0.20
 SQLAlchemy==2.0.36
 psycopg2-binary==2.9.11
+asyncpg==0.31.0          # Async PostgreSQL driver (required for SQLAlchemy async)
+greenlet==3.3.1          # Required by SQLAlchemy for async operations
 bcrypt==4.2.1
 httpx==0.28.1
 python-dotenv==1.2.1
+pydantic-settings==2.0+  # For Pydantic-based configuration
 
 # More to be added later...
 ```
@@ -310,14 +313,19 @@ The `.env` file stores all configuration and secrets. Never commit this file to 
 # ---------------------------------------------------------------------
 
 # Application Settings
-APP_NAME=med-z4
+APP_NAME="med-z4 Simple EHR"
+APP_VERSION=0.1.0
 APP_PORT=8005
-DEBUG=True
+APP_DEBUG=True
+
+# Sample Endpoint
+SAMPLE_API_URL="https://jsonplaceholder.typicode.com"
 
 # Session Management
 SESSION_SECRET_KEY=your-secret-key-here-minimum-32-characters-long
 SESSION_TIMEOUT_MINUTES=25
 SESSION_COOKIE_NAME=med_z4_session_id
+SESSION_COOKIE_MAX_AGE=1500
 
 # PostgreSQL Database (Shared with med-z1)
 POSTGRES_HOST=localhost
@@ -328,95 +336,203 @@ POSTGRES_PASSWORD=your-postgres-password-here
 
 # CCOW Context Vault
 CCOW_BASE_URL=http://localhost:8001
+CCOW_HEALTH_ENDPOINT=/ccow/health
+
+# VistA Real-time Service
+VISTA_BASE_URL=http://localhost:8003
+VISTA_HEALTH_ENDPOINT=/health
 
 # Security Settings
-BCRYPT_ROUNDS=12  # Password hashing cost factor (12 = ~300ms per hash)
+BCRYPT_ROUNDS=12
 
 # Logging
 LOG_LEVEL=INFO
 ```
 
+---
+
+## 4. Application Configuration
+
+This section covers the configuration system implementation using Pydantic Settings for type-safe configuration management.
+
+### 4.1 Environment Variables (.env) Reference
+
+See Section 3.4 for the complete `.env` template.
+
 ### 4.2 Configuration Loader (config.py)
 
-Centralized configuration module (in project root folder) that loads and validates environment variables.
+Centralized configuration module (in project root folder) using **Pydantic Settings** for type-safe configuration with automatic `.env` loading and validation.
 
 ```python
 # config.py
-# Centralized configuration for med-z4
-# Reads from .env file and provides typed config objects
+# Centralized configuration for med-z4 using Pydantic
+# Automatically loads from .env file with type validation
 
-import os
-from pathlib import Path
-from dotenv import load_dotenv
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Load .env file from project root
-PROJECT_ROOT = Path(__file__).parent
-load_dotenv(PROJECT_ROOT / ".env")
 
-# ---------------------------------------------------------------------
-# Application Configuration
-# ---------------------------------------------------------------------
+# Application Settings
+class AppSettings(BaseSettings):
+    name: str = "med-z4"
+    version: str = "0.1.0"
+    port: int = 8005
+    debug: bool = True
 
-APP_NAME = os.getenv("APP_NAME", "med-z4")
-APP_PORT = int(os.getenv("APP_PORT", "8005"))
-DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
+    # Pydantic will look for APP_NAME, APP_VERSION, APP_PORT, APP_DEBUG
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_prefix="APP_",
+        extra="ignore"
+    )
 
-# ---------------------------------------------------------------------
-# Session Configuration
-# ---------------------------------------------------------------------
 
-SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY")
-if not SESSION_SECRET_KEY:
-    raise ValueError("SESSION_SECRET_KEY must be set in .env file")
-if len(SESSION_SECRET_KEY) < 32:
-    raise ValueError("SESSION_SECRET_KEY must be at least 32 characters")
+# Sample Endpoint Settings (for testing external API calls)
+class SampleSettings(BaseSettings):
+    api_url: str = "https://jsonplaceholder.typicode.com"
 
-SESSION_TIMEOUT_MINUTES = int(os.getenv("SESSION_TIMEOUT_MINUTES", "25"))
-SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "med_z4_session_id")
-SESSION_COOKIE_MAX_AGE = SESSION_TIMEOUT_MINUTES * 60  # Convert to seconds
+    # Pydantic will look for SAMPLE_API_URL
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_prefix="SAMPLE_",
+        extra="ignore"
+    )
 
-# ---------------------------------------------------------------------
-# Database Configuration
-# ---------------------------------------------------------------------
 
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
-POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
-POSTGRES_DB = os.getenv("POSTGRES_DB", "medz1")
-POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+# Session Management Settings
+class SessionSettings(BaseSettings):
+    secret_key: str
+    timeout_minutes: int = 25
+    cookie_name: str = "med_z4_session_id"
 
-if not POSTGRES_PASSWORD:
-    raise ValueError("POSTGRES_PASSWORD must be set in .env file")
+    # Pydantic will look for SESSION_SECRET_KEY, SESSION_TIMEOUT_MINUTES, etc.
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_prefix="SESSION_",
+        extra="ignore"
+    )
 
-# SQLAlchemy async connection string
-DATABASE_URL = f"postgresql+asyncpg://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+    @property
+    def cookie_max_age(self) -> int:
+        """Computed property: converts timeout_minutes to seconds"""
+        return self.timeout_minutes * 60
 
-# ---------------------------------------------------------------------
-# CCOW Configuration
-# ---------------------------------------------------------------------
+    @field_validator("secret_key")
+    @classmethod
+    def validate_secret_key_length(cls, v: str) -> str:
+        """Validator: Ensure secret key is at least 32 characters"""
+        if len(v) < 32:
+            raise ValueError("SESSION_SECRET_KEY must be at least 32 characters")
+        return v
 
-CCOW_BASE_URL = os.getenv("CCOW_BASE_URL", "http://localhost:8001")
 
-# ---------------------------------------------------------------------
-# Security Configuration
-# ---------------------------------------------------------------------
+# CCOW Context Vault Settings
+class CCOWSettings(BaseSettings):
+    base_url: str
+    health_endpoint: str
 
-BCRYPT_ROUNDS = int(os.getenv("BCRYPT_ROUNDS", "12"))
+    # Pydantic will look for CCOW_BASE_URL, CCOW_HEALTH_ENDPOINT
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_prefix="CCOW_",
+        extra="ignore"
+    )
 
-# ---------------------------------------------------------------------
-# Logging Configuration
-# ---------------------------------------------------------------------
 
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+# VistA Real-time Service Settings
+class VistaSettings(BaseSettings):
+    base_url: str
+    health_endpoint: str
+
+    # Pydantic will look for VISTA_BASE_URL, VISTA_HEALTH_ENDPOINT
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_prefix="VISTA_",
+        extra="ignore"
+    )
+
+
+# PostgreSQL Database Settings (to be implemented)
+class PostgresSettings(BaseSettings):
+    """
+    Database configuration using Pydantic Settings.
+    To be implemented in upcoming development phase.
+
+    Will include:
+    - host, port, db, user, password fields
+    - Validator for required password
+    - Computed property for DATABASE_URL connection string
+    """
+    host: str = "localhost"
+    port: int = 5432
+    db: str = "medz1"
+    user: str = "postgres"
+    password: str
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_prefix="POSTGRES_",
+        extra="ignore"
+    )
+
+    @property
+    def database_url(self) -> str:
+        """Computed property: SQLAlchemy async connection string"""
+        return f"postgresql+asyncpg://{self.user}:{self.password}@{self.host}:{self.port}/{self.db}"
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_required(cls, v: str) -> str:
+        """Validator: Ensure password is provided"""
+        if not v:
+            raise ValueError("POSTGRES_PASSWORD must be set in .env file")
+        return v
+
+
+# Main Settings Container
+class Settings(BaseSettings):
+    """
+    Main settings container that groups all configuration classes.
+    Import this single object in application code.
+    """
+    app: AppSettings = AppSettings()
+    sample: SampleSettings = SampleSettings()
+    session: SessionSettings = SessionSettings()
+    ccow: CCOWSettings = CCOWSettings()
+    vista: VistaSettings = VistaSettings()
+    # postgres: PostgresSettings = PostgresSettings()  # Uncomment when implementing
+
+
+# Instantiate settings once to be imported elsewhere
+settings = Settings()
 ```
 
-**Configuration Pattern**
+**Usage in Application Code:**
 
-- **Fail Fast:** Raise errors on startup if required config is missing (don't fail later during runtime)
-- **Type Conversion:** Convert strings to int/bool where needed (`int(os.getenv(...))`)
-- **Sensible Defaults:** Provide defaults for non-sensitive settings (port, timeout)
-- **Validation:** Check constraints (e.g., secret key length) before app starts
-- **Single Import:** Other modules import from `config` (not `os.getenv` scattered everywhere)
+```python
+# Import the settings object
+from config import settings
+
+# Access nested configuration
+app_name = settings.app.name
+port = settings.app.port
+secret = settings.session.secret_key
+timeout_seconds = settings.session.cookie_max_age  # Computed property
+ccow_url = settings.ccow.base_url
+# db_url = settings.postgres.database_url  # When database config is implemented
+```
+
+**Pydantic Configuration Pattern**
+
+- **Type Safety:** All settings are typed (str, int, bool) with automatic conversion
+- **Automatic Loading:** Pydantic automatically loads from `.env` file via `SettingsConfigDict`
+- **Environment Prefixes:** Each settings class uses a prefix (APP_, SESSION_, CCOW_, etc.)
+- **Validation:** Use `@field_validator` for custom validation rules (e.g., secret key length)
+- **Computed Properties:** Use `@property` for derived values (e.g., cookie_max_age from timeout_minutes)
+- **Fail Fast:** Pydantic raises validation errors on startup if required fields are missing or invalid
+- **Sensible Defaults:** Provide defaults for non-sensitive settings
+- **Single Import:** Import `settings` object once, access all configuration via nested attributes
+- **IDE Support:** Full autocomplete and type hints in IDEs (PyCharm, VSCode)
 
 ---
 
@@ -462,7 +578,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 import logging
 
-from config import DATABASE_URL, DEBUG
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -471,8 +587,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------
 
 engine = create_async_engine(
-    DATABASE_URL,
-    echo=DEBUG,  # Log SQL queries if DEBUG=True
+    settings.postgres.database_url,
+    echo=settings.app.debug,  # Log SQL queries if debug=True
     pool_pre_ping=True,  # Verify connections before use
 )
 
@@ -770,7 +886,7 @@ from sqlalchemy import select, update
 import logging
 
 from app.models.auth import User, Session as SessionModel, AuditLog
-from config import SESSION_TIMEOUT_MINUTES
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -838,7 +954,7 @@ async def create_session(
 ) -> Dict[str, Any]:
     """Create a new session for authenticated user."""
     session_id = uuid.uuid4()
-    expires_at = datetime.utcnow() + timedelta(minutes=SESSION_TIMEOUT_MINUTES)
+    expires_at = datetime.utcnow() + timedelta(minutes=settings.session.timeout_minutes)
 
     session = SessionModel(
         session_id=session_id,
@@ -927,7 +1043,7 @@ import logging
 
 from database import get_db
 from app.models.auth import Session as SessionModel, User
-from config import SESSION_COOKIE_NAME
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -941,7 +1057,7 @@ async def get_current_user(
 
     Returns dict with user info, or redirects to /login if invalid.
     """
-    session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    session_id = request.cookies.get(settings.session.cookie_name)
 
     if not session_id:
         logger.warning("No session cookie found")
@@ -1121,7 +1237,7 @@ import httpx
 from typing import Optional, Dict, Any
 import logging
 
-from config import CCOW_BASE_URL, SESSION_COOKIE_NAME
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -1133,9 +1249,9 @@ class CCOWClient:
     """
 
     def __init__(self, session_id: str):
-        self.base_url = CCOW_BASE_URL
+        self.base_url = settings.ccow.base_url
         self.session_id = session_id
-        self.cookies = {SESSION_COOKIE_NAME: session_id}
+        self.cookies = {settings.session.cookie_name: session_id}
 
     async def get_context(self) -> Optional[Dict[str, Any]]:
         """Get current user's active patient context."""
@@ -1457,9 +1573,2789 @@ class ClinicalNote(Base):
 
 ## 10. Implementation Roadmap
 
-This section provides a phase-by-phase implementation guide with direct references to UI/UX specifications (Section 11) and complete code examples.
+This section provides implementation guidance for both **greenfield development** (Section 10.1+) and **incremental refactoring** (Section 10.0) approaches.
 
-### 10.1 Routes and Templates Contract
+---
+
+## 10.0 Refactoring Roadmap (From Skeleton to Full Implementation)
+
+**Purpose:** This section provides a phased approach for teams who have created a skeleton FastAPI + HTMX + Jinja2 application and want to incrementally refactor it to align with the med-z4 design specification.
+
+**Key Principle:** Database integration is deferred until after UI/UX foundation is established. Early phases use mock data to validate templates and routing before adding database complexity.
+
+---
+
+### 10.0.1 Refactoring Philosophy
+
+**Why This Sequence?**
+
+1. **UI/UX First:** Establish visual identity (Teal theme) and page flow (login → dashboard) without database dependencies
+2. **Mock Data Strategy:** Use hardcoded patient lists to validate templates and HTMX interactions
+3. **Incremental Validation:** Each phase produces a working application that can be tested
+4. **Preserve Testing:** Keep existing health check functionality for CCOW/VistA integration testing
+5. **Database Last:** Add SQLAlchemy models and real queries only after page structure is solid
+
+**Preservation vs. Replacement:**
+
+- **Preserve:** Health check routes (`/health/ccow`, `/health/vista`) for ongoing integration testing
+- **Replace:** Admin dashboard/test page with proper login → patient roster flow
+- **Refactor:** CSS from generic blue theme to med-z4 Teal/Emerald identity
+
+---
+
+### 10.0.2 Phase A: Theme Foundation (Days 1-2)
+
+**Goal:** Replace generic blue theme with med-z4 Teal/Emerald theme without changing functionality.
+
+**Prerequisites:** None (works with existing skeleton)
+
+**Tasks:**
+
+**A1. Update CSS with Theme Variables**
+
+Create new `app/static/css/style.css` (or update existing `app/static/style.css`):
+
+```css
+/* =====================================================
+   med-z4 Theme Foundation
+   Teal/Emerald color palette
+   ===================================================== */
+
+:root {
+    /* Primary Colors - Teal/Emerald */
+    --color-primary: #0d9488;          /* Teal 600 - Primary actions */
+    --color-primary-hover: #0f766e;    /* Teal 700 - Hover states */
+    --color-primary-light: #5eead4;    /* Teal 300 - Accents */
+
+    /* Background Colors */
+    --color-bg-page: #f0fdfa;          /* Teal 50 - Page background */
+    --color-bg-card: #ffffff;          /* White - Cards */
+    --color-bg-nav: #134e4a;           /* Teal 900 - Navigation bar */
+
+    /* Text Colors */
+    --color-text-primary: #134e4a;     /* Teal 900 - Headings */
+    --color-text-secondary: #475569;   /* Slate 600 - Body text */
+    --color-text-muted: #94a3b8;       /* Slate 400 - Hints/labels */
+    --color-text-inverse: #ffffff;     /* White text on dark backgrounds */
+
+    /* Border & Dividers */
+    --color-border: #ccfbf1;           /* Teal 100 - Card borders */
+    --color-border-input: #5eead4;     /* Teal 300 - Input focus */
+
+    /* Status Colors */
+    --color-success: #10b981;          /* Emerald 500 */
+    --color-warning: #f59e0b;          /* Amber 500 */
+    --color-error: #ef4444;            /* Red 500 */
+
+    /* Spacing & Layout */
+    --spacing-xs: 0.25rem;
+    --spacing-sm: 0.5rem;
+    --spacing-md: 1rem;
+    --spacing-lg: 1.5rem;
+    --spacing-xl: 2rem;
+
+    /* Typography */
+    --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-size-base: 1rem;
+    --font-size-lg: 1.125rem;
+    --font-size-xl: 1.25rem;
+    --font-size-2xl: 1.5rem;
+
+    /* Shadows */
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+}
+
+/* =====================================================
+   Base Styles
+   ===================================================== */
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: var(--font-family);
+    font-size: var(--font-size-base);
+    color: var(--color-text-secondary);
+    background-color: var(--color-bg-page);
+    line-height: 1.6;
+}
+
+/* =====================================================
+   Navigation
+   ===================================================== */
+
+.main-nav {
+    background-color: var(--color-bg-nav);
+    color: var(--color-text-inverse);
+    padding: var(--spacing-md) var(--spacing-lg);
+    box-shadow: var(--shadow-md);
+}
+
+.main-nav h1 {
+    font-size: var(--font-size-xl);
+    font-weight: 600;
+    text-align: center;
+    margin: 0;
+}
+
+/* =====================================================
+   Layout Containers
+   ===================================================== */
+
+.container {
+    max-width: 920px;
+    margin: var(--spacing-xl) auto;
+    padding: 0 var(--spacing-md);
+}
+
+/* =====================================================
+   Cards
+   ===================================================== */
+
+.welcome-card,
+.card {
+    background-color: var(--color-bg-card);
+    padding: var(--spacing-xl);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-sm);
+}
+
+.welcome-card h2,
+.card h2 {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-2xl);
+    margin-bottom: var(--spacing-md);
+}
+
+.test-zone {
+    margin-top: var(--spacing-xl);
+    padding-top: var(--spacing-lg);
+    border-top: 2px dashed var(--color-border);
+}
+
+/* =====================================================
+   Buttons
+   ===================================================== */
+
+button,
+.btn {
+    background-color: var(--color-primary);
+    color: var(--color-text-inverse);
+    border: none;
+    padding: 10px 18px;
+    font-size: var(--font-size-base);
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+    margin: var(--spacing-sm);
+    transition: background-color 0.2s ease;
+    min-width: 120px;
+}
+
+button:hover,
+.btn:hover {
+    background-color: var(--color-primary-hover);
+}
+
+button:disabled,
+.btn:disabled {
+    background-color: var(--color-text-muted);
+    cursor: not-allowed;
+}
+
+/* =====================================================
+   Forms & Inputs
+   ===================================================== */
+
+.input-group {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    flex-wrap: wrap;
+}
+
+input[type="number"],
+input[type="text"],
+input[type="email"],
+input[type="password"] {
+    padding: 8px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    font-size: var(--font-size-base);
+    transition: border-color 0.2s ease;
+}
+
+input:focus {
+    outline: none;
+    border-color: var(--color-border-input);
+    box-shadow: 0 0 0 3px rgba(94, 234, 212, 0.1);
+}
+
+label {
+    color: var(--color-text-secondary);
+    font-weight: 500;
+    font-size: var(--font-size-base);
+}
+
+/* =====================================================
+   Status Messages
+   ===================================================== */
+
+.success-msg {
+    background-color: #d1fae5;         /* Emerald 100 */
+    color: #065f46;                    /* Emerald 800 */
+    padding: var(--spacing-md);
+    margin-top: var(--spacing-md);
+    border: 1px solid #a7f3d0;         /* Emerald 200 */
+    border-radius: 6px;
+}
+
+.error-msg {
+    background-color: #fee2e2;         /* Red 100 */
+    color: #991b1b;                    /* Red 800 */
+    padding: var(--spacing-md);
+    margin-top: var(--spacing-md);
+    border: 1px solid #fecaca;         /* Red 200 */
+    border-radius: 6px;
+}
+
+.warning-msg {
+    background-color: #fef3c7;         /* Amber 100 */
+    color: #92400e;                    /* Amber 800 */
+    padding: var(--spacing-md);
+    margin-top: var(--spacing-md);
+    border: 1px solid #fde68a;         /* Amber 200 */
+    border-radius: 6px;
+}
+```
+
+**Verification:**
+- Reload application at http://localhost:8005
+- Colors should now be Teal/Emerald instead of blue
+- Layout/structure remains unchanged
+- All buttons and cards use new theme
+
+---
+
+**A2. Update Base Template Header**
+
+Update `app/templates/base.html` to improve structure:
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ settings.app.name }}{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="icon" href="/static/images/favicon-msu.ico">
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</head>
+<body>
+    <!-- Navigation Header -->
+    <nav class="main-nav">
+        <h1>{{ settings.app.name }} v{{ settings.app.version }}</h1>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>
+```
+
+**Changes:**
+- Added version display in header
+- Improved HTML comments for clarity
+- Added `{% block title %}` for page-specific titles
+
+**Verification:**
+- Application header now shows "med-z4 Simple EHR v0.1.0"
+- Teal navigation bar is visible
+
+---
+
+**⚠️ Important Pattern for All Route Handlers:**
+
+Since `base.html` uses `{{ settings.app.name }}` and `{{ settings.app.version }}`, **all route handlers that render templates must include `settings` in the template context**.
+
+**Required pattern for every route:**
+
+```python
+from config import settings  # Import at top of file
+
+# In every route handler that renders a template:
+return templates.TemplateResponse(
+    "template_name.html",
+    {
+        "request": request,
+        "settings": settings,  # REQUIRED - base.html needs this
+        # ... other context variables
+    }
+)
+```
+
+Forgetting to include `settings` will result in: `UndefinedError: 'settings' is undefined`
+
+---
+
+### 10.0.3 Phase B: Login Page (Days 2-3)
+
+**Goal:** Create login page with mock authentication (no database).
+
+**Prerequisites:** Phase A completed
+
+**Tasks:**
+
+**B1. Create Login Template**
+
+Create `app/templates/login.html`:
+
+```html
+{% extends "base.html" %}
+
+{% block title %}Login - {{ settings.app.name }}{% endblock %}
+
+{% block content %}
+<div class="login-container">
+    <div class="login-card">
+        <h2>Sign In</h2>
+        <p class="login-subtitle">Enter your credentials to access med-z4</p>
+
+        {% if error %}
+        <div class="error-msg">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <form method="POST" action="/login">
+            <div class="form-group">
+                <label for="email">Email Address</label>
+                <input type="email"
+                       id="email"
+                       name="email"
+                       placeholder="user@example.com"
+                       required
+                       autofocus>
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password"
+                       id="password"
+                       name="password"
+                       placeholder="Enter password"
+                       required>
+            </div>
+
+            <button type="submit" class="btn-primary">Sign In</button>
+        </form>
+
+        <div class="login-footer">
+            <p>Testing credentials: <code>test@example.com</code> / <code>password123</code></p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+```
+
+**B2. Add Login CSS**
+
+Add to `app/static/css/style.css`:
+
+```css
+/* =====================================================
+   Login Page Styles
+   ===================================================== */
+
+.login-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 60vh;
+}
+
+.login-card {
+    background-color: var(--color-bg-card);
+    padding: var(--spacing-xl);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-lg);
+    width: 100%;
+    max-width: 400px;
+}
+
+.login-card h2 {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-2xl);
+    margin-bottom: var(--spacing-sm);
+    text-align: center;
+}
+
+.login-subtitle {
+    color: var(--color-text-muted);
+    text-align: center;
+    margin-bottom: var(--spacing-lg);
+    font-size: 0.95rem;
+}
+
+.form-group {
+    margin-bottom: var(--spacing-lg);
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: var(--spacing-xs);
+    color: var(--color-text-secondary);
+    font-weight: 500;
+}
+
+.form-group input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    font-size: var(--font-size-base);
+}
+
+.btn-primary {
+    width: 100%;
+    margin-top: var(--spacing-md);
+    padding: 12px;
+    font-size: var(--font-size-lg);
+}
+
+.login-footer {
+    margin-top: var(--spacing-lg);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--color-border);
+    text-align: center;
+}
+
+.login-footer p {
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+}
+
+.login-footer code {
+    background-color: var(--color-bg-page);
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: monospace;
+    color: var(--color-text-primary);
+}
+```
+
+**B3. Create Login Routes (Mock)**
+
+Create or update `app/routes/auth.py`:
+
+```python
+# app/routes/auth.py
+from fastapi import APIRouter, Request, Form, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+
+from config import settings  # Required for base.html template
+
+router = APIRouter()
+templates = Jinja2Templates(directory="app/templates")
+
+# Mock credentials for testing (Phase B only)
+MOCK_USERS = {
+    "test@example.com": "password123",
+    "admin@va.gov": "admin123",
+}
+
+
+@router.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    """Display login form."""
+    return templates.TemplateResponse("login.html", {
+        "request": request,
+        "settings": settings  # Required by base.html
+    })
+
+
+@router.post("/login")
+async def login(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...)
+):
+    """Mock authentication - accepts specific test credentials."""
+
+    # Check mock credentials
+    if email in MOCK_USERS and MOCK_USERS[email] == password:
+        # Create response with redirect
+        response = RedirectResponse(url="/dashboard", status_code=303)
+
+        # Set simple session cookie (mock - just the email for now)
+        response.set_cookie(
+            key="session_id",
+            value=email,  # In real app, this would be a UUID
+            max_age=1500,  # 25 minutes
+            httponly=True,
+            samesite="lax"
+        )
+
+        return response
+
+    # Authentication failed
+    return templates.TemplateResponse(
+        "login.html",
+        {
+            "request": request,
+            "settings": settings,  # Required by base.html
+            "error": "Invalid email or password. Try test@example.com / password123"
+        },
+        status_code=401
+    )
+
+
+@router.post("/logout")
+async def logout():
+    """Clear session and redirect to login."""
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie("session_id")
+    return response
+```
+
+**B4. Update Root Route**
+
+Update `app/main.py`:
+
+```python
+# app/main.py
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
+
+from app.routes import auth, health, admin  # Import your routers
+from config import settings
+
+app = FastAPI(title=settings.app.name, debug=settings.app.debug)
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+# Include routers
+app.include_router(auth.router)
+app.include_router(health.router)
+app.include_router(admin.router)
+
+
+@app.get("/")
+async def root():
+    """Redirect to login page."""
+    return RedirectResponse(url="/login")
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "app": settings.app.name}
+```
+
+**Verification:**
+- Navigate to http://localhost:8005 → should redirect to `/login`
+- Enter `test@example.com` / `password123` → should redirect to `/dashboard`
+- Wrong credentials → should show error message
+- Old index page at `/` no longer accessible (replaced by login)
+
+---
+
+### 10.0.4 Phase C: Dashboard/Patient Roster Skeleton (Days 3-4)
+
+**Goal:** Create dashboard with mock patient data (no database).
+
+**Prerequisites:** Phase B completed
+
+**Tasks:**
+
+**C1. Create Dashboard Template**
+
+Create `app/templates/dashboard.html`:
+
+```html
+{% extends "base.html" %}
+
+{% block title %}Patient Roster - {{ settings.app.name }}{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <h2>Patient Roster</h2>
+    <div class="header-actions">
+        <form method="POST" action="/logout" style="display: inline;">
+            <button type="submit" class="btn-secondary">Logout</button>
+        </form>
+    </div>
+</div>
+
+<div class="patient-roster-card">
+    <table class="patient-table">
+        <thead>
+            <tr>
+                <th>Patient Name</th>
+                <th>ICN</th>
+                <th>DOB</th>
+                <th>SSN (Last 4)</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for patient in patients %}
+            <tr>
+                <td class="patient-name">{{ patient.name_display }}</td>
+                <td>{{ patient.icn }}</td>
+                <td>{{ patient.dob }}</td>
+                <td>{{ patient.ssn_last4 }}</td>
+                <td>
+                    <button class="btn-sm" disabled>View</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="dashboard-footer">
+    <p>Showing {{ patients|length }} patients (mock data)</p>
+</div>
+{% endblock %}
+```
+
+**C2. Add Dashboard CSS**
+
+Add to `app/static/css/style.css`:
+
+```css
+/* =====================================================
+   Dashboard Styles
+   ===================================================== */
+
+.dashboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-lg);
+}
+
+.dashboard-header h2 {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-2xl);
+    margin: 0;
+}
+
+.header-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+}
+
+.btn-secondary {
+    background-color: var(--color-text-muted);
+    color: var(--color-text-inverse);
+}
+
+.btn-secondary:hover {
+    background-color: var(--color-text-secondary);
+}
+
+.patient-roster-card {
+    background-color: var(--color-bg-card);
+    padding: var(--spacing-lg);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-sm);
+    overflow-x: auto;
+}
+
+/* =====================================================
+   Table Styles
+   ===================================================== */
+
+.patient-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-size-base);
+}
+
+.patient-table thead {
+    background-color: var(--color-bg-page);
+    border-bottom: 2px solid var(--color-border);
+}
+
+.patient-table th {
+    text-align: left;
+    padding: var(--spacing-md);
+    color: var(--color-text-primary);
+    font-weight: 600;
+}
+
+.patient-table td {
+    padding: var(--spacing-md);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.patient-table tbody tr:hover {
+    background-color: var(--color-bg-page);
+    cursor: pointer;
+}
+
+.patient-name {
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.btn-sm {
+    padding: 6px 12px;
+    font-size: 0.875rem;
+    min-width: 80px;
+}
+
+.dashboard-footer {
+    margin-top: var(--spacing-md);
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: 0.875rem;
+}
+```
+
+**C3. Create Dashboard Route with Mock Data**
+
+Create `app/routes/dashboard.py`:
+
+```python
+# app/routes/dashboard.py
+from fastapi import APIRouter, Request, Cookie
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from typing import Optional
+
+from config import settings  # Required for base.html template
+
+router = APIRouter()
+templates = Jinja2Templates(directory="app/templates")
+
+# Mock patient data (Phase C only)
+MOCK_PATIENTS = [
+    {
+        "icn": "ICN100001",
+        "name_display": "DOOREE, ADAM",
+        "dob": "1956-03-15",
+        "ssn_last4": "6789",
+    },
+    {
+        "icn": "ICN100002",
+        "name_display": "SMITH, JOHN",
+        "dob": "1965-07-22",
+        "ssn_last4": "1234",
+    },
+    {
+        "icn": "ICN100003",
+        "name_display": "JOHNSON, MARY",
+        "dob": "1972-11-08",
+        "ssn_last4": "5678",
+    },
+    {
+        "icn": "ICN100004",
+        "name_display": "WILLIAMS, ROBERT",
+        "dob": "1980-05-30",
+        "ssn_last4": "9012",
+    },
+    {
+        "icn": "ICN100005",
+        "name_display": "BROWN, PATRICIA",
+        "dob": "1958-09-14",
+        "ssn_last4": "3456",
+    },
+]
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request, session_id: Optional[str] = Cookie(None)):
+    """Display patient roster (mock data)."""
+
+    # Simple session check
+    if not session_id:
+        return RedirectResponse(url="/login", status_code=303)
+
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {
+            "request": request,
+            "settings": settings,  # Required by base.html
+            "patients": MOCK_PATIENTS,
+        }
+    )
+```
+
+**C4. Register Dashboard Router**
+
+Update `app/main.py`:
+
+```python
+from app.routes import auth, health, admin, dashboard  # Add dashboard
+
+# Include routers
+app.include_router(auth.router)
+app.include_router(dashboard.router)
+app.include_router(health.router)
+app.include_router(admin.router)
+```
+
+**Verification:**
+- Login with test credentials → should see patient roster table
+- Table shows 5 mock patients with names, ICNs, DOBs
+- Logout button in header works → redirects to login
+- Accessing `/dashboard` without session → redirects to login
+
+---
+
+### 10.0.5 Phase D: Database Configuration (Days 4-5)
+
+**Goal:** Add PostgreSQL connection and SQLAlchemy models.
+
+**Prerequisites:** Phases A-C completed, PostgreSQL database running
+
+**Install Required Dependencies:**
+
+Before proceeding, install the async PostgreSQL driver and greenlet library:
+
+```bash
+# Activate virtual environment
+source .venv/bin/activate
+
+# Install async database dependencies
+pip install asyncpg==0.31.0 greenlet==3.3.1
+
+# Update requirements.txt
+pip freeze > requirements.txt
+```
+
+**Why these dependencies?**
+- `asyncpg` - Async PostgreSQL driver used by SQLAlchemy's async engine
+- `greenlet` - Required by SQLAlchemy for managing context switching in async operations
+
+**Tasks:**
+
+**D1. Complete PostgresSettings in config.py**
+
+Update `config.py`:
+
+```python
+# Uncomment this line in the Settings class
+postgres: PostgresSettings = PostgresSettings()
+```
+
+**D2. Create database.py**
+
+Create `database.py` in project root:
+
+```python
+# database.py
+# Database connection management for med-z4
+# Uses SQLAlchemy 2.x async with connection pooling
+
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from typing import AsyncGenerator
+import logging
+
+from config import settings
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------
+# Async Database Engine (Singleton)
+# ---------------------------------------------------------------------
+
+engine = create_async_engine(
+    settings.postgres.database_url,
+    echo=settings.app.debug,  # Log SQL queries if debug=True
+    pool_pre_ping=True,  # Verify connections before use
+)
+
+# Async session factory (creates new AsyncSession objects)
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autocommit=False,
+    autoflush=False,
+)
+
+# ---------------------------------------------------------------------
+# Session Dependency for FastAPI
+# ---------------------------------------------------------------------
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """
+    FastAPI dependency that provides a database session.
+
+    Usage in routes:
+        @app.get("/patients")
+        async def list_patients(db: AsyncSession = Depends(get_db)):
+            result = await db.execute(select(Patient))
+            patients = result.scalars().all()
+            return patients
+    """
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            logger.error(f"Database session error: {e}")
+            raise
+        finally:
+            await session.close()
+```
+
+**D3. Test Database Connection**
+
+Create `test_db.py` in project root:
+
+```python
+# test_db.py
+import asyncio
+from sqlalchemy import text
+from database import engine
+
+
+async def test_connection():
+    """Test database connectivity."""
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(text("SELECT 1"))
+            print("✓ Database connected successfully!")
+            print(f"  Result: {result.scalar()}")
+
+            # Test querying a table
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM clinical.patient_demographics")
+            )
+            count = result.scalar()
+            print(f"✓ Found {count} patients in database")
+
+    except Exception as e:
+        print(f"✗ Database connection failed: {e}")
+
+
+if __name__ == "__main__":
+    asyncio.run(test_connection())
+```
+
+Run the test:
+```bash
+python test_db.py
+```
+
+**Expected output:**
+```
+✓ Database connected successfully!
+  Result: 1
+✓ Found 20 patients in database
+```
+
+**D4. Update Dashboard to Use Real Data**
+
+Update `app/routes/dashboard.py`:
+
+```python
+# app/routes/dashboard.py
+from fastapi import APIRouter, Request, Cookie, Depends
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text
+from typing import Optional
+
+from database import get_db
+from config import settings  # Required for base.html template
+
+router = APIRouter()
+templates = Jinja2Templates(directory="app/templates")
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    session_id: Optional[str] = Cookie(None)
+):
+    """Display patient roster from database."""
+
+    # Simple session check
+    if not session_id:
+        return RedirectResponse(url="/login", status_code=303)
+
+    # Query real patients from database
+    result = await db.execute(
+        text("""
+            SELECT
+                patient_key,
+                icn,
+                name_display,
+                dob,
+                ssn_last4
+            FROM clinical.patient_demographics
+            ORDER BY name_last, name_first
+            LIMIT 50
+        """)
+    )
+
+    patients = [
+        {
+            "patient_key": row[0],
+            "icn": row[1],
+            "name_display": row[2],
+            "dob": row[3].strftime("%Y-%m-%d") if row[3] else "N/A",
+            "ssn_last4": row[4] or "N/A",
+        }
+        for row in result.fetchall()
+    ]
+
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {
+            "request": request,
+            "settings": settings,  # Required by base.html
+            "patients": patients,
+        }
+    )
+```
+
+**Verification:**
+- Login → dashboard now shows real patients from `medz1` database
+- Patient count reflects actual database records
+- All 4 phases (A→D) complete!
+
+---
+
+### 10.0.6 Preservation: Keep Health Check Routes
+
+To preserve your existing CCOW/VistA health check functionality during refactoring:
+
+**Option 1: Admin Test Page**
+
+Keep your existing routes but move them to an "admin" area:
+
+```python
+# app/routes/admin.py
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+
+router = APIRouter(prefix="/admin", tags=["Admin"])
+templates = Jinja2Templates(directory="app/templates")
+
+
+@router.get("/test", response_class=HTMLResponse)
+async def admin_test_page(request: Request):
+    """Admin testing page for health checks."""
+    return templates.TemplateResponse("admin/test.html", {"request": request})
+```
+
+Create `app/templates/admin/test.html` with your existing test buttons.
+
+Access at: http://localhost:8005/admin/test
+
+**Option 2: Dashboard Footer Widget**
+
+Add health check buttons to dashboard footer:
+
+```html
+<!-- In dashboard.html footer -->
+<div class="dashboard-footer">
+    <p>Showing {{ patients|length }} patients</p>
+
+    <div class="health-checks">
+        <button hx-get="/health/ccow"
+                hx-target="#health-results"
+                hx-swap="innerHTML"
+                class="btn-sm">
+            Check CCOW
+        </button>
+
+        <button hx-get="/health/vista"
+                hx-target="#health-results"
+                hx-swap="innerHTML"
+                class="btn-sm">
+            Check VistA
+        </button>
+
+        <div id="health-results"></div>
+    </div>
+</div>
+```
+
+---
+
+### 10.0.7 Refactoring Checklist
+
+Use this checklist to track your progress:
+
+**Phase A: Theme Foundation**
+- [ ] Update CSS variables to Teal/Emerald theme
+- [ ] Replace button/card colors
+- [ ] Update navigation bar styles
+- [ ] Test: Application displays in Teal theme
+- [ ] Test: All existing functionality still works
+
+**Phase B: Login Page**
+- [ ] Create `login.html` template
+- [ ] Add login page CSS styles
+- [ ] Create `auth.py` routes with mock authentication
+- [ ] Update root route to redirect to `/login`
+- [ ] Test: Can login with test@example.com / password123
+- [ ] Test: Wrong credentials show error message
+- [ ] Test: Successful login redirects to dashboard
+
+**Phase C: Dashboard Skeleton**
+- [ ] Create `dashboard.html` template with table
+- [ ] Add dashboard and table CSS styles
+- [ ] Create `dashboard.py` route with mock data
+- [ ] Add logout button functionality
+- [ ] Register dashboard router in main.py
+- [ ] Test: Dashboard shows 5 mock patients
+- [ ] Test: Logout button redirects to login
+- [ ] Test: Accessing dashboard without session redirects to login
+
+**Phase D: Database Integration**
+- [ ] Install required dependencies (`asyncpg` and `greenlet`)
+- [ ] Uncomment `postgres` in Settings class
+- [ ] Create `database.py` with async engine
+- [ ] Create `test_db.py` and verify connection
+- [ ] Update dashboard route to query real data
+- [ ] Test: Dashboard shows actual patients from database
+- [ ] Test: Patient count reflects database records
+
+**Optional: Preserve Testing**
+- [ ] Move health checks to `/admin/test` route
+- [ ] Or add health check buttons to dashboard footer
+- [ ] Test: Can still check CCOW/VistA health
+
+**Phase E: Real Authentication** (Section 10.1)
+- [ ] Create `app/models/auth.py` with User, Session, AuditLog models
+- [ ] Create `app/services/auth_service.py` with authentication functions
+- [ ] Update `app/routes/auth.py` to use database authentication
+- [ ] Update `app/routes/dashboard.py` with session validation
+- [ ] Test: Login with existing database user credentials
+- [ ] Test: Session stored in `auth.sessions` table
+- [ ] Test: Dashboard validates session before rendering
+- [ ] Test: Logout invalidates session
+- [ ] Test: Expired/invalid sessions redirect to login
+
+**Phase F: CCOW Integration** (Section 10.2)
+- [ ] Create `app/services/ccow_service.py` for CCOW Vault API communication
+- [ ] Add `CCOWContext` model to `app/models/auth.py`
+- [ ] Create `auth.ccow_contexts` table in database
+- [ ] Update `app/routes/dashboard.py` to join CCOW context
+- [ ] Add `/ccow/poll` endpoint for context polling
+- [ ] Add HTMX polling to `dashboard.html` (every 5 seconds)
+- [ ] Add `/patient/select/{icn}` endpoint for setting context
+- [ ] Update "View" button with HTMX to set CCOW context
+- [ ] Add `.patient-selected` CSS styling for highlighted patient
+- [ ] Update logout route to leave CCOW context
+- [ ] Test: Dashboard joins CCOW context on load
+- [ ] Test: Context stored in `auth.ccow_contexts` table
+- [ ] Test: HTMX polls for context changes
+- [ ] Test: med-z1 sets context → med-z4 follows
+- [ ] Test: med-z4 sets context (View button) → med-z1 follows
+- [ ] Test: Patient highlighted when selected
+- [ ] Test: Logout leaves CCOW context
+
+---
+
+### 10.0.8 Next Steps After Phase D
+
+Once Phase D is complete, proceed with the remaining phases:
+
+**Phase E: Real Authentication** (Section 10.1)
+- Replace mock authentication with database-backed authentication
+- Implement bcrypt password verification
+- Add UUID session management with `auth.sessions` table
+- Session validation and expiration handling
+
+**Phase F: CCOW Integration** (Section 10.2)
+- Create CCOW service layer for Vault API communication
+- Add CCOW context tracking to database
+- Join CCOW context on dashboard load
+- HTMX polling for context changes (every 5 seconds)
+- Patient context synchronization with med-z1
+
+**Phase G: Patient Detail Page** (Coming Soon)
+- Create patient detail view
+- Display clinical data (vitals, allergies, medications, notes)
+- Tabbed interface for different data categories
+
+**Phase H: Patient CRUD** (Coming Soon)
+- Add "New Patient" form
+- Create/edit vitals, allergies, medications, notes
+- Form validation and error handling
+
+**Implementation Strategy:**
+- Complete one phase fully before starting the next
+- Each phase builds on the previous work
+- Sections will be added iteratively based on progress
+
+---
+
+## 10.1 Phase E: Real Authentication (Days 5-7)
+
+**Goal:** Replace mock authentication with database-backed authentication using `auth.users` and `auth.sessions` tables.
+
+**Prerequisites:** Phase D completed, database connection verified
+
+**What You'll Build:**
+- SQLAlchemy models for `auth.users` and `auth.sessions`
+- Authentication service with bcrypt password verification
+- Session creation and validation
+- Middleware to protect routes with real session checks
+- Updated login/logout routes using database
+
+---
+
+### 10.1.1 Phase E Overview
+
+**Current State (After Phase D):**
+- Mock authentication with hardcoded credentials
+- Simple cookie with email as session identifier
+- No database validation
+
+**Target State (After Phase E):**
+- Real user authentication against `auth.users` table
+- bcrypt password hashing verification
+- UUID session IDs stored in `auth.sessions` table
+- Session expiration and validation
+- Middleware protecting all authenticated routes
+
+**Migration Strategy:**
+- Keep existing templates (no UI changes)
+- Replace route logic incrementally
+- Test each component independently
+
+---
+
+### 10.1.2 Task E1: Create SQLAlchemy Auth Models
+
+Create `app/models/auth.py` to define the database models for authentication:
+
+```python
+# app/models/auth.py
+# SQLAlchemy models for authentication tables
+
+from sqlalchemy import Column, String, Integer, Boolean, TIMESTAMP, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.ext.declarative import declarative_base
+from datetime import datetime
+import uuid
+
+Base = declarative_base()
+
+
+class User(Base):
+    """User model (auth.users table)."""
+    __tablename__ = "users"
+    __table_args__ = {"schema": "auth"}
+
+    user_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    display_name = Column(String(255), nullable=False)
+    first_name = Column(String(100))
+    last_name = Column(String(100))
+    home_site_sta3n = Column(Integer)
+    is_active = Column(Boolean, default=True)
+    is_locked = Column(Boolean, default=False)
+    failed_login_attempts = Column(Integer, default=0)
+    last_login_at = Column(TIMESTAMP)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_by = Column(String(100), default="system")
+
+
+class Session(Base):
+    """Session model (auth.sessions table)."""
+    __tablename__ = "sessions"
+    __table_args__ = {"schema": "auth"}
+
+    session_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("auth.users.user_id"), nullable=False, index=True)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    last_activity_at = Column(TIMESTAMP, default=datetime.utcnow)
+    expires_at = Column(TIMESTAMP, nullable=False)
+    is_active = Column(Boolean, default=True)
+    ip_address = Column(String(45))
+    user_agent = Column(String(500))
+
+
+class AuditLog(Base):
+    """Audit log model (auth.audit_logs table)."""
+    __tablename__ = "audit_logs"
+    __table_args__ = {"schema": "auth"}
+
+    audit_id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("auth.users.user_id", ondelete="SET NULL"))
+    event_type = Column(String(50), nullable=False)
+    event_timestamp = Column(TIMESTAMP, default=datetime.utcnow)
+    email = Column(String(255))
+    ip_address = Column(String(45))
+    user_agent = Column(String)
+    success = Column(Boolean)
+    failure_reason = Column(String)
+    session_id = Column(UUID(as_uuid=True))
+```
+
+**Verification:**
+- File created at `app/models/auth.py`
+- No syntax errors: `python -c "from app.models.auth import User, Session, AuditLog; print('Models imported successfully')"`
+
+---
+
+### 10.1.3 Task E2: Create Authentication Service
+
+Create `app/services/auth_service.py` with functions for user authentication and session management:
+
+```python
+# app/services/auth_service.py
+# Authentication service functions
+
+import bcrypt
+import uuid
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update
+import logging
+
+from app.models.auth import User, Session as SessionModel, AuditLog
+from config import settings
+
+logger = logging.getLogger(__name__)
+
+
+def verify_password(plain_password: str, password_hash: str) -> bool:
+    """Verify a plain password against a bcrypt hash."""
+    try:
+        return bcrypt.checkpw(
+            plain_password.encode('utf-8'),
+            password_hash.encode('utf-8')
+        )
+    except Exception as e:
+        logger.error(f"Password verification error: {e}")
+        return False
+
+
+async def authenticate_user(db: AsyncSession, email: str, password: str) -> Optional[User]:
+    """
+    Authenticate user by email and password.
+    Returns User object if authentication succeeds, None otherwise.
+    """
+    # Query user by email
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        logger.warning(f"Authentication failed: user not found - {email}")
+        return None
+
+    if user.is_locked:
+        logger.warning(f"Authentication failed: account locked - {email}")
+        return None
+
+    if not user.is_active:
+        logger.warning(f"Authentication failed: user inactive - {email}")
+        return None
+
+    # Verify password
+    if not verify_password(password, user.password_hash):
+        logger.warning(f"Authentication failed: invalid password - {email}")
+        # Increment failed login attempts
+        user.failed_login_attempts += 1
+        if user.failed_login_attempts >= 5:
+            user.is_locked = True
+            logger.warning(f"Account locked after 5 failed attempts: {email}")
+        await db.commit()
+        return None
+
+    # Reset failed login attempts on successful login
+    await db.execute(
+        update(User)
+        .where(User.user_id == user.user_id)
+        .values(
+            last_login_at=datetime.utcnow(),
+            failed_login_attempts=0
+        )
+    )
+    await db.commit()
+
+    logger.info(f"Authentication successful: {email}")
+    return user
+
+
+async def create_session(
+    db: AsyncSession,
+    user: User,
+    ip_address: str,
+    user_agent: str
+) -> Dict[str, Any]:
+    """Create a new session for authenticated user."""
+    session_id = uuid.uuid4()
+    expires_at = datetime.utcnow() + timedelta(minutes=settings.session.timeout_minutes)
+
+    session = SessionModel(
+        session_id=session_id,
+        user_id=user.user_id,
+        created_at=datetime.utcnow(),
+        last_activity_at=datetime.utcnow(),
+        expires_at=expires_at,
+        is_active=True,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+
+    db.add(session)
+
+    # Log successful login
+    audit_log = AuditLog(
+        user_id=user.user_id,
+        event_type="login",
+        event_timestamp=datetime.utcnow(),
+        email=user.email,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        success=True,
+        session_id=session_id,
+    )
+    db.add(audit_log)
+
+    await db.commit()
+
+    logger.info(f"Session created for user {user.email}: {session_id}")
+
+    return {
+        "session_id": str(session_id),
+        "user_id": str(user.user_id),
+        "email": user.email,
+        "display_name": user.display_name,
+        "expires_at": expires_at.isoformat(),
+    }
+
+
+async def validate_session(db: AsyncSession, session_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Validate session by ID.
+    Returns user info if valid, None if invalid/expired.
+    """
+    try:
+        session_uuid = uuid.UUID(session_id)
+    except (ValueError, AttributeError):
+        logger.warning(f"Invalid session ID format: {session_id}")
+        return None
+
+    # Query session with user data
+    result = await db.execute(
+        select(SessionModel, User)
+        .join(User, SessionModel.user_id == User.user_id)
+        .where(SessionModel.session_id == session_uuid)
+    )
+    row = result.first()
+
+    if not row:
+        logger.warning(f"Session not found: {session_id}")
+        return None
+
+    session, user = row
+
+    # Check if session is active
+    if not session.is_active:
+        logger.warning(f"Session inactive: {session_id}")
+        return None
+
+    # Check if session expired
+    if session.expires_at < datetime.utcnow():
+        logger.warning(f"Session expired: {session_id}")
+        await invalidate_session(db, session_id)
+        return None
+
+    # Check if user is active
+    if not user.is_active:
+        logger.warning(f"User inactive: {user.email}")
+        return None
+
+    # Update last activity timestamp
+    await db.execute(
+        update(SessionModel)
+        .where(SessionModel.session_id == session_uuid)
+        .values(last_activity_at=datetime.utcnow())
+    )
+    await db.commit()
+
+    return {
+        "session_id": str(session.session_id),
+        "user_id": str(user.user_id),
+        "email": user.email,
+        "display_name": user.display_name,
+        "role": "user",  # Default role since column doesn't exist in database
+    }
+
+
+async def invalidate_session(db: AsyncSession, session_id: str) -> bool:
+    """Invalidate a session by marking it inactive."""
+    try:
+        session_uuid = uuid.UUID(session_id)
+    except (ValueError, AttributeError):
+        return False
+
+    result = await db.execute(
+        update(SessionModel)
+        .where(SessionModel.session_id == session_uuid)
+        .values(is_active=False)
+    )
+    await db.commit()
+
+    if result.rowcount > 0:
+        logger.info(f"Session invalidated: {session_id}")
+        return True
+
+    return False
+```
+
+**Verification:**
+- File created at `app/services/auth_service.py`
+- No syntax errors: `python -c "from app.services.auth_service import authenticate_user, create_session; print('Service imported successfully')"`
+
+---
+
+### 10.1.4 Task E3: Update Auth Routes to Use Database
+
+Update `app/routes/auth.py` to replace mock authentication with real database calls:
+
+```python
+# app/routes/auth.py
+from fastapi import APIRouter, Request, Form, Depends, status
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from database import get_db
+from app.services.auth_service import authenticate_user, create_session, invalidate_session
+from config import settings
+
+router = APIRouter()
+templates = Jinja2Templates(directory="app/templates")
+
+
+@router.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    """Display login form."""
+    return templates.TemplateResponse("login.html", {
+        "request": request,
+        "settings": settings
+    })
+
+
+@router.post("/login")
+async def login(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """Authenticate user against database."""
+
+    ip_address = request.client.host
+    user_agent = request.headers.get("user-agent", "unknown")
+
+    # Authenticate user with database
+    user = await authenticate_user(db, email, password)
+
+    if not user:
+        return templates.TemplateResponse(
+            "login.html",
+            {
+                "request": request,
+                "settings": settings,
+                "error": "Invalid email or password."
+            },
+            status_code=status.HTTP_401_UNAUTHORIZED
+        )
+
+    # Create database session
+    session_info = await create_session(db, user, ip_address, user_agent)
+
+    # Redirect to dashboard with session cookie
+    response = RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+    response.set_cookie(
+        key=settings.session.cookie_name,
+        value=session_info["session_id"],
+        max_age=settings.session.cookie_max_age,
+        httponly=True,
+        samesite="lax",
+        secure=False,  # Set True in production with HTTPS
+    )
+
+    return response
+
+
+@router.post("/logout")
+async def logout(request: Request, db: AsyncSession = Depends(get_db)):
+    """Invalidate session and redirect to login."""
+
+    session_id = request.cookies.get(settings.session.cookie_name)
+
+    if session_id:
+        await invalidate_session(db, session_id)
+
+    response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie(key=settings.session.cookie_name)
+
+    return response
+```
+
+**Changes from Mock Version:**
+- Removed `MOCK_USERS` dictionary
+- Added `db: AsyncSession = Depends(get_db)` parameter
+- Using `authenticate_user()` from service (queries database)
+- Using `create_session()` from service (creates UUID session)
+- Using `invalidate_session()` from service (marks session inactive)
+
+**Verification:**
+- File updated at `app/routes/auth.py`
+- Restart server: `uvicorn app.main:app --reload --port 8005`
+- Navigate to http://localhost:8005/login
+- Login should still work (if credentials exist in database)
+
+---
+
+### 10.1.5 Task E4: Update Dashboard Route with Session Validation
+
+Update `app/routes/dashboard.py` to validate sessions against the database:
+
+```python
+# app/routes/dashboard.py
+from fastapi import APIRouter, Request, Cookie, Depends
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
+from typing import Optional
+
+from database import get_db
+from app.services.auth_service import validate_session
+from config import settings
+
+router = APIRouter()
+templates = Jinja2Templates(directory="app/templates")
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    session_id: Optional[str] = Cookie(None, alias=settings.session.cookie_name)
+):
+    """Display patient roster with session validation."""
+
+    # Validate session against database
+    user_info = await validate_session(db, session_id) if session_id else None
+
+    if not user_info:
+        return RedirectResponse(url="/login", status_code=303)
+
+    # Query real patients from database
+    result = await db.execute(
+        text("""
+            SELECT
+                patient_key,
+                icn,
+                name_display,
+                dob,
+                ssn_last4
+            FROM clinical.patient_demographics
+            ORDER BY name_last, name_first
+            LIMIT 50
+        """)
+    )
+
+    patients = [
+        {
+            "patient_key": row[0],
+            "icn": row[1],
+            "name_display": row[2],
+            "dob": row[3].strftime("%Y-%m-%d") if row[3] else "N/A",
+            "ssn_last4": row[4] or "N/A",
+        }
+        for row in result.fetchall()
+    ]
+
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {
+            "request": request,
+            "settings": settings,
+            "patients": patients,
+            "user": user_info,  # Pass user info to template (optional)
+        }
+    )
+```
+
+**Changes from Phase D Version:**
+- Added `validate_session()` call before querying patients
+- Redirects to login if session is invalid/expired
+- Optional: Pass `user_info` to template for displaying logged-in user
+
+**Optional: Display logged-in user in navigation header**
+
+Update `app/templates/base.html` to show the logged-in user in the navigation bar:
+
+```html
+<nav class="main-nav">
+    <h1>{{ settings.app.name }}</h1>
+    {% if user %}
+    <span class="user-display">
+        {{ user.display_name or user.email }}
+    </span>
+    {% endif %}
+</nav>
+```
+
+Update `app/static/style.css` to style the navigation with flexbox layout:
+
+```css
+/* ---- Layout Containers ---- */
+.main-nav {
+    background-color: #2c3e50;
+    color: white;
+    padding: 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.main-nav h1 {
+    margin: 0;
+}
+
+.user-display {
+    margin-right: 1rem;
+}
+```
+
+**Sticky Navigation Explained:**
+- `position: sticky` - Header remains fixed at the top when scrolling
+- `top: 0` - Sticks at the top edge of the viewport (0px from top)
+- `z-index: 1000` - Ensures header stays above other page content
+- `box-shadow` - Adds subtle shadow to visually separate header from content when scrolling
+
+This displays the user right-justified in the navigation header across all pages. The navigation header will remain visible at the top of the viewport when the user scrolls down pages with long content (such as the patient roster).
+
+**Verification:**
+- Restart server
+- Login with real database credentials
+- Dashboard should display with patient roster
+- Session validated against `auth.sessions` table
+
+---
+
+### 10.1.6 Phase E Verification
+
+**Complete End-to-End Test:**
+
+1. **Restart the server:**
+   ```bash
+   uvicorn app.main:app --reload --port 8005
+   ```
+
+2. **Test login with database user:**
+   - Navigate to http://localhost:8005
+   - Should redirect to `/login`
+   - Enter: `test@example.com` / `password123`
+   - Should redirect to `/dashboard`
+
+3. **Verify session in database:**
+   ```sql
+   SELECT session_id, user_id, is_active, expires_at
+   FROM auth.sessions
+   ORDER BY created_at DESC
+   LIMIT 1;
+   ```
+   - Should see your new session with `is_active = true`
+
+4. **Verify session validation:**
+   - Refresh dashboard page - should stay logged in
+   - Session's `last_activity_at` timestamp should update
+
+5. **Test logout:**
+   - Click "Logout" button
+   - Should redirect to `/login`
+   - Check database - session should have `is_active = false`
+
+6. **Test invalid session:**
+   - Try accessing `/dashboard` without logging in
+   - Should redirect to `/login`
+
+7. **Test session expiration:**
+   - Wait 25+ minutes (or reduce `SESSION_TIMEOUT_MINUTES` in `.env` for testing)
+   - Try to access `/dashboard`
+   - Should redirect to `/login` (expired session)
+
+**Success Criteria:**
+- ✅ Login uses database authentication
+- ✅ Password verified with bcrypt
+- ✅ Sessions stored in `auth.sessions` table
+- ✅ Dashboard validates sessions before rendering
+- ✅ Logout invalidates session
+- ✅ Expired sessions redirect to login
+
+---
+
+### 10.1.7 Troubleshooting Phase E
+
+**Issue: "Invalid email or password" even with correct credentials**
+
+**Solution:**
+- Verify user exists: `SELECT * FROM auth.users WHERE email = 'youremail@example.com';`
+- Check `is_active` is `true` and `is_locked` is `false`
+- Verify `failed_login_attempts` hasn't reached 5 (which locks the account)
+
+---
+
+**Issue: "Session not found" error**
+
+**Solution:**
+- Check cookie name matches: `settings.session.cookie_name`
+- Verify `.env` has `SESSION_COOKIE_NAME=session_id` (not `med_z4_session_id`)
+- Clear browser cookies and login again
+
+---
+
+**Issue: Sessions expire immediately**
+
+**Solution:**
+- Check `SESSION_TIMEOUT_MINUTES` in `.env`
+- Verify `expires_at` timestamp: `SELECT expires_at FROM auth.sessions ORDER BY created_at DESC LIMIT 1;`
+- Should be 25 minutes in the future
+
+---
+
+**Issue: bcrypt errors**
+
+**Solution:**
+- Ensure bcrypt is installed: `pip install bcrypt==4.2.1`
+- Check `requirements.txt` includes bcrypt
+
+---
+
+This completes Phase E! You now have full database-backed authentication with bcrypt password hashing and session management.
+
+---
+
+## 10.2 Phase F: CCOW Integration
+
+### 10.2.1 Phase F Overview
+
+**Goal:** Integrate med-z4 with the CCOW (Clinical Context Object Workgroup) Vault to enable patient context synchronization with med-z1.
+
+**What is CCOW?**
+CCOW allows multiple clinical applications to share patient context. When a clinician selects a patient in one application (med-z1), all other participating applications (med-z4) automatically switch to that same patient context.
+
+**Architecture:**
+- **CCOW Vault** (running on port 8001) - Central context manager
+- **med-z1** (port 8000) - Primary EHR (context manager and participant)
+- **med-z4** (port 8005) - Secondary EHR (context manager and participant)
+- **Bidirectional:** Both applications can set and follow patient context
+
+**Phase F Tasks:**
+1. **Task F1:** Create CCOW Service Layer for API communication
+2. **Task F2:** Add CCOW Context Models and Database Storage
+3. **Task F3:** Update Dashboard with Context Participation (Join/Follow)
+4. **Task F4:** Add CCOW Polling for Context Changes
+5. **Task F5:** Add Patient Selection to Set Context (Manager Mode)
+6. **Task F6:** Update Logout to Leave CCOW Context
+
+**Key Concepts:**
+- **Context Token:** Unique identifier for current patient context session
+- **Context Poll:** Periodic check to see if context has changed
+- **Context Participant:** Application that follows context (med-z4)
+- **Context Manager:** Application that sets context (med-z1)
+
+---
+
+### 10.2.2 Task F1: Create CCOW Service Layer
+
+Create `app/services/ccow_service.py` to handle all CCOW Vault API communication:
+
+```python
+# app/services/ccow_service.py
+# CCOW Vault API integration service
+
+import httpx
+import logging
+from typing import Optional, Dict, Any
+from datetime import datetime
+
+from config import settings
+
+logger = logging.getLogger(__name__)
+
+
+class CCOWService:
+    """Service for CCOW Vault API interactions."""
+
+    def __init__(self):
+        self.base_url = settings.ccow.base_url
+        self.timeout = 5.0  # 5 second timeout for CCOW calls
+
+    async def join_context(self, user_id: str, session_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Join CCOW context as a participant.
+        Returns context token and current patient ICN if available.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/ccow/join",
+                    json={
+                        "application_id": "med-z4",
+                        "user_id": user_id,
+                        "session_id": session_id,
+                    }
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                logger.info(f"Joined CCOW context: {data.get('context_token')}")
+                return data
+
+        except httpx.TimeoutException:
+            logger.error("CCOW join timeout")
+            return None
+        except httpx.HTTPStatusError as e:
+            logger.error(f"CCOW join failed: {e.response.status_code}")
+            return None
+        except Exception as e:
+            logger.error(f"CCOW join error: {e}")
+            return None
+
+    async def poll_context(self, context_token: str) -> Optional[Dict[str, Any]]:
+        """
+        Poll CCOW for current context.
+        Returns current patient ICN and context status.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.base_url}/ccow/context",
+                    params={"context_token": context_token}
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                logger.debug(f"CCOW context poll: {data.get('patient_icn')}")
+                return data
+
+        except httpx.TimeoutException:
+            logger.warning("CCOW poll timeout")
+            return None
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"CCOW poll failed: {e.response.status_code}")
+            return None
+        except Exception as e:
+            logger.error(f"CCOW poll error: {e}")
+            return None
+
+    async def leave_context(self, context_token: str) -> bool:
+        """
+        Leave CCOW context (on logout).
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/ccow/leave",
+                    json={"context_token": context_token}
+                )
+                response.raise_for_status()
+
+                logger.info(f"Left CCOW context: {context_token}")
+                return True
+
+        except Exception as e:
+            logger.error(f"CCOW leave error: {e}")
+            return False
+
+    async def set_context(self, context_token: str, patient_icn: str) -> bool:
+        """
+        Set patient context (optional - for future use if med-z4 becomes a manager).
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/ccow/context",
+                    json={
+                        "context_token": context_token,
+                        "patient_icn": patient_icn
+                    }
+                )
+                response.raise_for_status()
+
+                logger.info(f"Set CCOW context: {patient_icn}")
+                return True
+
+        except Exception as e:
+            logger.error(f"CCOW set context error: {e}")
+            return False
+
+    async def health_check(self) -> bool:
+        """Check if CCOW Vault is available."""
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.base_url}{settings.ccow.health_endpoint}"
+                )
+                return response.status_code == 200
+        except Exception:
+            return False
+
+
+# Singleton instance
+ccow_service = CCOWService()
+```
+
+**Verification:**
+- File created at `app/services/ccow_service.py`
+- No syntax errors: `python -c "from app.services.ccow_service import ccow_service; print('CCOW service imported')"`
+
+---
+
+### 10.2.3 Task F2: Add CCOW Context Models and Database Storage
+
+Update `app/models/auth.py` to add CCOW context tracking:
+
+```python
+# Add this new model to app/models/auth.py (after AuditLog class)
+
+class CCOWContext(Base):
+    """CCOW context tracking (auth.ccow_contexts table)."""
+    __tablename__ = "ccow_contexts"
+    __table_args__ = {"schema": "auth"}
+
+    context_id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("auth.sessions.session_id", ondelete="CASCADE"), nullable=False, index=True)
+    context_token = Column(String(255), unique=True, nullable=False, index=True)
+    patient_icn = Column(String(50), index=True)
+    is_active = Column(Boolean, default=True)
+    joined_at = Column(TIMESTAMP, default=datetime.utcnow)
+    last_poll_at = Column(TIMESTAMP, default=datetime.utcnow)
+    left_at = Column(TIMESTAMP)
+```
+
+**Create database migration (if using Alembic) or run SQL directly:**
+
+```sql
+-- Run this in PostgreSQL to create the table
+CREATE TABLE auth.ccow_contexts (
+    context_id SERIAL PRIMARY KEY,
+    session_id UUID NOT NULL REFERENCES auth.sessions(session_id) ON DELETE CASCADE,
+    context_token VARCHAR(255) NOT NULL UNIQUE,
+    patient_icn VARCHAR(50),
+    is_active BOOLEAN DEFAULT true,
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_poll_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    left_at TIMESTAMP
+);
+
+CREATE INDEX idx_ccow_session ON auth.ccow_contexts(session_id);
+CREATE INDEX idx_ccow_token ON auth.ccow_contexts(context_token);
+CREATE INDEX idx_ccow_patient ON auth.ccow_contexts(patient_icn);
+```
+
+**Verification:**
+- Model added to `app/models/auth.py`
+- Table created in database
+- Verify table exists: `\d auth.ccow_contexts` in psql
+
+---
+
+### 10.2.4 Task F3: Update Dashboard with Context Participation
+
+Update `app/routes/dashboard.py` to join CCOW context on dashboard load:
+
+```python
+# app/routes/dashboard.py
+# Update imports
+from fastapi import APIRouter, Request, Cookie, Depends
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
+from typing import Optional
+
+from database import get_db
+from app.services.auth_service import validate_session
+from app.services.ccow_service import ccow_service
+from app.models.auth import CCOWContext
+from config import settings
+
+router = APIRouter()
+templates = Jinja2Templates(directory="app/templates")
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    session_id: Optional[str] = Cookie(None, alias=settings.session.cookie_name)
+):
+    """Display patient roster with session validation and CCOW participation."""
+
+    # Validate session against database
+    user_info = await validate_session(db, session_id) if session_id else None
+
+    if not user_info:
+        return RedirectResponse(url="/login", status_code=303)
+
+    # Join CCOW context (or retrieve existing)
+    context_data = None
+    current_patient_icn = None
+
+    # Check if we already have an active CCOW context for this session
+    result = await db.execute(
+        text("""
+            SELECT context_token, patient_icn
+            FROM auth.ccow_contexts
+            WHERE session_id = :session_id AND is_active = true
+            ORDER BY joined_at DESC
+            LIMIT 1
+        """),
+        {"session_id": session_id}
+    )
+    existing_context = result.fetchone()
+
+    if existing_context:
+        # Use existing context
+        context_token = existing_context[0]
+        current_patient_icn = existing_context[1]
+
+        # Poll for updates
+        context_data = await ccow_service.poll_context(context_token)
+        if context_data and context_data.get("patient_icn") != current_patient_icn:
+            # Context changed - update database
+            current_patient_icn = context_data.get("patient_icn")
+            await db.execute(
+                text("""
+                    UPDATE auth.ccow_contexts
+                    SET patient_icn = :patient_icn, last_poll_at = CURRENT_TIMESTAMP
+                    WHERE context_token = :context_token
+                """),
+                {"patient_icn": current_patient_icn, "context_token": context_token}
+            )
+            await db.commit()
+    else:
+        # Join CCOW context for the first time
+        # NOTE: If another application (e.g., med-z1) has already set a patient context,
+        # the join response will include that patient_icn, and it will be automatically
+        # highlighted in the roster on initial page load.
+        context_data = await ccow_service.join_context(
+            user_id=user_info["user_id"],
+            session_id=session_id
+        )
+
+        if context_data:
+            context_token = context_data.get("context_token")
+            current_patient_icn = context_data.get("patient_icn")  # May be set by another app
+
+            # Store context in database
+            await db.execute(
+                text("""
+                    INSERT INTO auth.ccow_contexts
+                    (session_id, context_token, patient_icn, is_active)
+                    VALUES (:session_id, :context_token, :patient_icn, true)
+                """),
+                {
+                    "session_id": session_id,
+                    "context_token": context_token,
+                    "patient_icn": current_patient_icn
+                }
+            )
+            await db.commit()
+
+    # Query patients from database
+    result = await db.execute(
+        text("""
+            SELECT
+                patient_key,
+                icn,
+                name_display,
+                dob,
+                ssn_last4
+            FROM clinical.patient_demographics
+            ORDER BY name_last, name_first
+            LIMIT 50
+        """)
+    )
+
+    patients = [
+        {
+            "patient_key": row[0],
+            "icn": row[1],
+            "name_display": row[2],
+            "dob": row[3].strftime("%Y-%m-%d") if row[3] else "N/A",
+            "ssn_last4": row[4] or "N/A",
+            "is_selected": row[1] == current_patient_icn  # Highlight current context patient
+        }
+        for row in result.fetchall()
+    ]
+
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {
+            "request": request,
+            "settings": settings,
+            "patients": patients,
+            "user": user_info,
+            "current_patient_icn": current_patient_icn,
+            "ccow_active": context_data is not None,
+        }
+    )
+```
+
+**Changes Made:**
+- Added CCOW service import
+- Check for existing active CCOW context in database
+- Join CCOW context on first dashboard load
+- **If med-z1 already set a patient context, that patient is automatically highlighted on initial load**
+- Poll CCOW context on subsequent loads
+- Store/update context in `auth.ccow_contexts` table
+- Pass `current_patient_icn` to template
+- Add `is_selected` flag to highlight current patient
+
+---
+
+### 10.2.5 Task F4: Add CCOW Polling Endpoint
+
+Create an HTMX endpoint to poll CCOW context every few seconds:
+
+Add to `app/routes/dashboard.py`:
+
+```python
+@router.get("/ccow/poll")
+async def ccow_poll(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    session_id: Optional[str] = Cookie(None, alias=settings.session.cookie_name)
+):
+    """
+    HTMX endpoint to poll CCOW context.
+    Returns HTML fragment showing current patient or empty if no change.
+    """
+    if not session_id:
+        return ""
+
+    # Get current context from database
+    result = await db.execute(
+        text("""
+            SELECT context_token, patient_icn
+            FROM auth.ccow_contexts
+            WHERE session_id = :session_id AND is_active = true
+            ORDER BY joined_at DESC
+            LIMIT 1
+        """),
+        {"session_id": session_id}
+    )
+    context_row = result.fetchone()
+
+    if not context_row:
+        return ""
+
+    context_token = context_row[0]
+    stored_patient_icn = context_row[1]
+
+    # Poll CCOW for current context
+    context_data = await ccow_service.poll_context(context_token)
+
+    if not context_data:
+        return ""
+
+    current_patient_icn = context_data.get("patient_icn")
+
+    # If context changed, update database and return notification
+    if current_patient_icn != stored_patient_icn:
+        await db.execute(
+            text("""
+                UPDATE auth.ccow_contexts
+                SET patient_icn = :patient_icn, last_poll_at = CURRENT_TIMESTAMP
+                WHERE context_token = :context_token
+            """),
+            {"patient_icn": current_patient_icn, "context_token": context_token}
+        )
+        await db.commit()
+
+        # Get patient details
+        if current_patient_icn:
+            result = await db.execute(
+                text("""
+                    SELECT name_display
+                    FROM clinical.patient_demographics
+                    WHERE icn = :icn
+                    LIMIT 1
+                """),
+                {"icn": current_patient_icn}
+            )
+            patient_row = result.fetchone()
+            patient_name = patient_row[0] if patient_row else "Unknown Patient"
+
+            # Return HTMX fragment to refresh page or show notification
+            return f"""
+            <div hx-swap-oob="true" id="context-notification">
+                <div class="notification info">
+                    Context changed to: {patient_name} (ICN: {current_patient_icn})
+                    <button hx-get="/dashboard" hx-target="body" hx-swap="outerHTML">
+                        Refresh
+                    </button>
+                </div>
+            </div>
+            """
+
+    return ""  # No change
+```
+
+**Update dashboard.html to add polling:**
+
+Add this to `app/templates/dashboard.html` in the content block:
+
+```html
+<!-- CCOW Context Notification Area -->
+<div id="context-notification"
+     hx-get="/ccow/poll"
+     hx-trigger="every 5s"
+     hx-swap="outerHTML">
+</div>
+
+<!-- Show current context -->
+{% if current_patient_icn %}
+<div class="context-banner">
+    <strong>Current Context:</strong> Patient ICN {{ current_patient_icn }}
+</div>
+{% endif %}
+```
+
+---
+
+### 10.2.6 Task F5: Add Patient Selection to Set Context
+
+Allow users to set CCOW context by clicking the "View" button on any patient in the roster. This makes med-z4 a **context manager** (able to set context), not just a participant (following context).
+
+**Add patient selection endpoint to `app/routes/dashboard.py`:**
+
+```python
+@router.post("/patient/select/{icn}")
+async def select_patient(
+    icn: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    session_id: Optional[str] = Cookie(None, alias=settings.session.cookie_name)
+):
+    """
+    Set CCOW context to the selected patient.
+    Called when user clicks "View" button on a patient.
+    """
+    if not session_id:
+        return {"success": False, "error": "No session"}
+
+    # Validate session
+    user_info = await validate_session(db, session_id)
+    if not user_info:
+        return {"success": False, "error": "Invalid session"}
+
+    # Get CCOW context token
+    result = await db.execute(
+        text("""
+            SELECT context_token
+            FROM auth.ccow_contexts
+            WHERE session_id = :session_id AND is_active = true
+            ORDER BY joined_at DESC
+            LIMIT 1
+        """),
+        {"session_id": session_id}
+    )
+    context_row = result.fetchone()
+
+    if not context_row:
+        return {"success": False, "error": "No active CCOW context"}
+
+    context_token = context_row[0]
+
+    # Set CCOW context
+    success = await ccow_service.set_context(context_token, icn)
+
+    if success:
+        # Update database
+        await db.execute(
+            text("""
+                UPDATE auth.ccow_contexts
+                SET patient_icn = :patient_icn, last_poll_at = CURRENT_TIMESTAMP
+                WHERE context_token = :context_token
+            """),
+            {"patient_icn": icn, "context_token": context_token}
+        )
+        await db.commit()
+
+        # Get patient name for response
+        result = await db.execute(
+            text("""
+                SELECT name_display
+                FROM clinical.patient_demographics
+                WHERE icn = :icn
+                LIMIT 1
+            """),
+            {"icn": icn}
+        )
+        patient_row = result.fetchone()
+        patient_name = patient_row[0] if patient_row else "Unknown Patient"
+
+        return {
+            "success": True,
+            "patient_name": patient_name,
+            "patient_icn": icn
+        }
+    else:
+        return {"success": False, "error": "Failed to set CCOW context"}
+```
+
+**Update patient roster table in `app/templates/dashboard.html`:**
+
+Add CSS class for highlighting selected patient:
+
+```css
+/* Add to app/static/style.css */
+.patient-selected {
+    background-color: var(--color-primary-light);
+    font-weight: 600;
+}
+
+.patient-selected td {
+    color: var(--color-primary);
+}
+```
+
+Update the patient table row to include selection highlighting and HTMX on the View button:
+
+```html
+<!-- In dashboard.html patient table -->
+<tbody>
+{% for patient in patients %}
+<tr class="{% if patient.is_selected %}patient-selected{% endif %}">
+    <td>{{ patient.patient_key }}</td>
+    <td>{{ patient.icn }}</td>
+    <td>{{ patient.name_display }}</td>
+    <td>{{ patient.dob }}</td>
+    <td>{{ patient.ssn_last4 }}</td>
+    <td>
+        <button
+            class="btn btn-primary"
+            hx-post="/patient/select/{{ patient.icn }}"
+            hx-swap="none"
+            hx-on::after-request="
+                if(event.detail.successful) {
+                    const data = JSON.parse(event.detail.xhr.response);
+                    alert('Context set to: ' + data.patient_name + ' (ICN: ' + data.patient_icn + ')');
+                    window.location.reload();
+                }
+            ">
+            View
+        </button>
+    </td>
+</tr>
+{% endfor %}
+</tbody>
+```
+
+**How it works:**
+
+1. **User clicks "View" button** on a patient row
+2. **HTMX POST request** to `/patient/select/{icn}`
+3. **Backend**:
+   - Validates session and gets active CCOW context token
+   - Calls `ccow_service.set_context()` to update CCOW Vault
+   - Updates local database with new `patient_icn`
+4. **JavaScript alert** shows confirmation: "Context set to: [Patient Name]"
+5. **Page reloads** to show updated highlighting
+6. **Patient row** with `is_selected=true` gets `.patient-selected` CSS class
+7. **Other applications** (like med-z1) poll CCOW and see the context change
+
+**Future Enhancement (Phase G):**
+Replace the `alert()` and `window.location.reload()` with navigation to patient detail page:
+```javascript
+// Future: Navigate to patient detail page
+window.location.href = '/patient/' + data.patient_icn;
+```
+
+**Verification:**
+- Click "View" button on a patient
+- Alert shows: "Context set to: [Patient Name] (ICN: [ICN])"
+- Page reloads with patient row highlighted
+- Check database: `SELECT patient_icn FROM auth.ccow_contexts WHERE is_active = true;`
+- Open med-z1, wait 5 seconds, should see context change notification
+
+---
+
+### 10.2.7 Task F6: Update Logout to Leave CCOW Context
+
+Update `app/routes/auth.py` logout route to leave CCOW context:
+
+```python
+# app/routes/auth.py - Update logout function
+
+from app.services.ccow_service import ccow_service
+from sqlalchemy import text
+
+@router.post("/logout")
+async def logout(request: Request, db: AsyncSession = Depends(get_db)):
+    """Invalidate session, leave CCOW context, and redirect to login."""
+
+    session_id = request.cookies.get(settings.session.cookie_name)
+
+    if session_id:
+        # Get CCOW context token before invalidating session
+        result = await db.execute(
+            text("""
+                SELECT context_token
+                FROM auth.ccow_contexts
+                WHERE session_id = :session_id AND is_active = true
+                LIMIT 1
+            """),
+            {"session_id": session_id}
+        )
+        context_row = result.fetchone()
+
+        if context_row:
+            context_token = context_row[0]
+
+            # Leave CCOW context
+            await ccow_service.leave_context(context_token)
+
+            # Mark context as inactive
+            await db.execute(
+                text("""
+                    UPDATE auth.ccow_contexts
+                    SET is_active = false, left_at = CURRENT_TIMESTAMP
+                    WHERE context_token = :context_token
+                """),
+                {"context_token": context_token}
+            )
+            await db.commit()
+
+        # Invalidate session
+        await invalidate_session(db, session_id)
+
+    response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie(key=settings.session.cookie_name)
+
+    return response
+```
+
+---
+
+### 10.2.8 Phase F Verification
+
+**Complete End-to-End Test:**
+
+1. **Ensure CCOW Vault is running:**
+   ```bash
+   # Check CCOW health
+   curl http://localhost:8001/ccow/health
+   # Expected: {"status": "healthy"}
+   ```
+
+2. **Start med-z4:**
+   ```bash
+   uvicorn app.main:app --reload --port 8005
+   ```
+
+3. **Test CCOW join with existing context:**
+   - In med-z1, select a patient (e.g., ICN: 1234567V890)
+   - Login to med-z4 (fresh session)
+   - Navigate to dashboard
+   - **Dashboard should automatically highlight the patient selected in med-z1**
+   - Check database:
+   ```sql
+   SELECT context_token, patient_icn, is_active
+   FROM auth.ccow_contexts
+   ORDER BY joined_at DESC
+   LIMIT 1;
+   ```
+   - Should see new context record with `is_active = true` and `patient_icn = '1234567V890'`
+
+4. **Test context synchronization (med-z1 → med-z4):**
+   - In med-z1, select a patient (this sets CCOW context)
+   - Wait 5 seconds (HTMX polling interval)
+   - med-z4 dashboard should show notification with patient context
+   - Refresh should highlight the selected patient in the roster
+
+5. **Test patient selection (med-z4 → CCOW):**
+   - In med-z4, click "View" button on a patient
+   - Alert should show: "Context set to: [Patient Name] (ICN: [ICN])"
+   - Page reloads and selected patient row is highlighted
+   - Check database:
+   ```sql
+   SELECT patient_icn FROM auth.ccow_contexts
+   WHERE is_active = true
+   ORDER BY joined_at DESC LIMIT 1;
+   ```
+   - Should match the selected patient's ICN
+
+6. **Test bidirectional context (med-z4 → med-z1):**
+   - In med-z4, select a different patient
+   - Wait 5 seconds
+   - Check med-z1 - should show context change notification
+   - Both applications now share the same patient context
+
+7. **Test CCOW leave:**
+   - Click logout in med-z4
+   - Check database:
+   ```sql
+   SELECT is_active, left_at
+   FROM auth.ccow_contexts
+   ORDER BY joined_at DESC
+   LIMIT 1;
+   ```
+   - Should see `is_active = false` and `left_at` timestamp
+
+**Success Criteria:**
+- ✅ Dashboard joins CCOW context on load (participant mode)
+- ✅ **If patient already selected in med-z1, it's automatically highlighted on first med-z4 dashboard load**
+- ✅ CCOW context stored in database
+- ✅ HTMX polls for context changes every 5 seconds
+- ✅ Context changes from med-z1 trigger notifications in med-z4
+- ✅ Clicking "View" button sets CCOW context (manager mode)
+- ✅ med-z4 can set context that med-z1 follows (bidirectional)
+- ✅ Currently selected patient highlighted in roster
+- ✅ Alert confirms patient selection
+- ✅ Logout leaves CCOW context
+- ✅ Multiple sessions can coexist with separate contexts
+
+---
+
+### 10.2.9 Troubleshooting Phase F
+
+**Issue: "CCOW join timeout" errors**
+
+**Solution:**
+- Verify CCOW Vault is running: `curl http://localhost:8001/ccow/health`
+- Check `CCOW_BASE_URL` in `.env` matches vault address
+- Ensure no firewall blocking port 8001
+
+---
+
+**Issue: Context not updating when patient selected in med-z1**
+
+**Solution:**
+- Check HTMX polling is active: inspect browser network tab for `/ccow/poll` requests every 5 seconds
+- Verify med-z1 is setting context correctly
+- Check `last_poll_at` timestamp is updating: `SELECT last_poll_at FROM auth.ccow_contexts ORDER BY joined_at DESC LIMIT 1;`
+
+---
+
+**Issue: Multiple context records for same session**
+
+**Solution:**
+- Check query filters `is_active = true` to get only active context
+- Old contexts are kept for audit purposes with `is_active = false`
+- This is expected behavior
+
+---
+
+**Issue: Patient not highlighting in roster**
+
+**Solution:**
+- Verify `is_selected` logic in dashboard route
+- Check `current_patient_icn` matches patient `icn` in database
+- Add CSS for `.patient-selected` class to highlight row
+
+---
+
+**Issue: "View" button doesn't set context or shows error**
+
+**Solution:**
+- Check browser console for JavaScript errors
+- Verify `/patient/select/{icn}` endpoint is registered in dashboard router
+- Ensure CCOW context token exists: `SELECT context_token FROM auth.ccow_contexts WHERE is_active = true;`
+- Check CCOW Vault received the set_context call (check vault logs)
+- Verify response JSON has `success: true`
+- If alert doesn't show, check HTMX `hx-on::after-request` syntax
+
+---
+
+**Issue: med-z1 not receiving context changes from med-z4**
+
+**Solution:**
+- Verify both applications use the same CCOW Vault (same `CCOW_BASE_URL`)
+- Check med-z1 is polling CCOW context (should see polls every 5 seconds in network tab)
+- Verify context_token is shared across applications (check vault state)
+- Check CCOW Vault logs to confirm both apps joined the same context session
+
+---
+
+This completes Phase F! You now have full bidirectional CCOW integration with med-z4 as both a context manager (can set context) and participant (can follow context changes).
+
+---
+
+## 10.10 Quick Start Summary (Reference)
+
+**Note:** This section provides a quick validation sequence for greenfield development. If following the refactoring roadmap (Sections 10.0-10.1), you can skip this section.
+
+For those who want to quickly validate the development environment before diving into the detailed phases, here's a minimal validation sequence:
+
+**Step 1: Create Database Connection**
+```python
+# database.py (SQLAlchemy engine)
+from sqlalchemy.ext.asyncio import create_async_engine
+from config import DATABASE_URL
+
+engine = create_async_engine(DATABASE_URL)
+```
+
+**Step 2: Test Connection to medz1 Database**
+```python
+from database import engine
+
+async def test_connection():
+    async with engine.connect() as conn:
+        result = await conn.execute("SELECT 1")
+        print("Database connected!")
+
+# Run with: python -c "import asyncio; from test_db import test_connection; asyncio.run(test_connection())"
+```
+
+**Step 3: Verification**
+```bash
+# Verify configuration loads without errors
+python -c "from config import settings; print('Config OK')"
+
+# Verify database connection (requires running test_connection() from Step 2)
+# Expected output: "Database connected!"
+```
+
+Once these validation steps succeed, proceed with the detailed phase-by-phase implementation below.
+
+---
+
+## 10.11 Routes and Templates Contract (Reference)
+
+**Note:** This section provides a complete reference for all routes. It's useful for understanding the full application structure.
 
 Complete reference for all HTTP endpoints:
 
@@ -1598,7 +4494,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from app.services.auth_service import authenticate_user, create_session, invalidate_session
-from config import SESSION_COOKIE_NAME, SESSION_COOKIE_MAX_AGE
+from config import settings
 
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
@@ -1631,9 +4527,9 @@ async def login(
 
     response = RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
     response.set_cookie(
-        key=SESSION_COOKIE_NAME,
+        key=settings.session.cookie_name,
         value=session_info["session_id"],
-        max_age=SESSION_COOKIE_MAX_AGE,
+        max_age=settings.session.cookie_max_age,
         httponly=True,
         samesite="lax",
         secure=False,  # Set True in production
@@ -1643,12 +4539,12 @@ async def login(
 
 @router.post("/logout")
 async def logout(request: Request, db: AsyncSession = Depends(get_db)):
-    session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    session_id = request.cookies.get(settings.session.cookie_name)
     if session_id:
         await invalidate_session(db, session_id)
 
     response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-    response.delete_cookie(key=SESSION_COOKIE_NAME)
+    response.delete_cookie(key=settings.session.cookie_name)
     return response
 ```
 
@@ -1661,9 +4557,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.routes import auth, dashboard, context, crud
-from config import APP_NAME, DEBUG
+from config import settings
 
-app = FastAPI(title=APP_NAME, debug=DEBUG)
+app = FastAPI(title=settings.app.name, debug=settings.app.debug)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -1683,7 +4579,7 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "app": APP_NAME}
+    return {"status": "healthy", "app": settings.app.name}
 ```
 
 **Verification:**

@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Patient Roster - {{ settings.app.name }}{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <h2>Patient Roster</h2>
+    <div class="header-actions">
+        <form method="POST" action="/logout" style="display: inline;">
+            <button type="submit" class="btn-secondary">Logout</button>
+        </form>
+    </div>
+</div>
+
+<div class="patient-roster-card">
+    <table class="patient-table">
+        <thead>
+            <tr>
+                <th>Patient Name</th>
+                <th>ICN</th>
+                <th>DOB</th>
+                <th>SSN (Last 4)</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for patient in patients %}
+            <tr>
+                <td class="patient-name">{{ patient.name_display }}</td>
+                <td>{{ patient.icn }}</td>
+                <td>{{ patient.dob }}</td>
+                <td>{{ patient.ssn_last4 }}</td>
+                <td>
+                    <button class="btn-sm" disabled>View</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="dashboard-footer">
+    <p>Showing {{ patients|length }} patients</p>
+
+    <div class="health-checks">
+        <button hx-get="/health/ccow"
+                hx-target="#health-results"
+                hx-swap="innerHTML"
+                class="btn-sm">
+            Check CCOW
+        </button>
+
+        <button hx-get="/health/vista"
+                hx-target="#health-results"
+                hx-swap="innerHTML"
+                class="btn-sm">
+            Check VistA
+        </button>
+
+        <div id="health-results"></div>
+    </div>
+</div>
+{% endblock %}

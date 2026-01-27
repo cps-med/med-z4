@@ -2,20 +2,19 @@
 # Master dependencis list with pinned versions
 # ---------------------------------------------
 
-# ---- Initial set ----
-fastapi==0.123.9             # Pinning to avoid breaking changes
-uvicorn[standard]==0.38.0    # Production server with high-perf extras
+# Initial set
+fastapi==0.123.9
+uvicorn[standard]==0.38.0
 Jinja2==3.1.6
 python-multipart==0.0.20
 SQLAlchemy==2.0.36
 psycopg2-binary==2.9.11
+asyncpg==0.31.0
+greenlet==3.3.1
 bcrypt==4.2.1
 httpx==0.28.1
-python-dotenv==1.2.1         # Loads environment variables from .env
-pydantic-settings
+python-dotenv==1.2.1
+pydantic-settings==2.0+
 httpx
 
-# ---- More to be added later ----
-
-
-
+# More to be added later

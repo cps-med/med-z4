@@ -13,15 +13,13 @@
 # -----------------------------------------------------------------
 
 # Main imports
-# import logging
-# import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 # Routes
-from app.routes import admin, health
+from app.routes import auth, admin, health, dashboard
 
 # Import 'settings' object from root-level config file
 from config import settings
@@ -29,6 +27,7 @@ from config import settings
 print()
 print(f"       Application Name: {settings.app.name}")
 print(f"    Application Version: {settings.app.version}")
+print(f"      Application Debug: {settings.app.debug}")
 print(f"         Sample API URL: {settings.sample.api_url}")
 print(f"Session Timeout Minutes: {settings.session.timeout_minutes}")
 print(f"    Session Cookie Name: {settings.session.cookie_name}")
@@ -40,7 +39,7 @@ print(f"  VistA Health Endpoint: {settings.vista.health_endpoint}")
 print()
 
 # Initialize the FastAPI app
-app = FastAPI(title=settings.app.name)
+app = FastAPI(title=settings.app.name, debug=settings.app.debug)
 
 # Mount the static files directory
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -49,13 +48,21 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
 # Register all routers
+app.include_router(auth.router)
+app.include_router(dashboard.router)
 app.include_router(admin.router)
 app.include_router(health.router)
 
+
 # Create root route handler
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "settings": settings})
+@app.get("/")
+async def root():
+    """Redirect to login page."""
+    return RedirectResponse(url="/login")
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "app": settings.app.name}
 
 
 # Simple route handler

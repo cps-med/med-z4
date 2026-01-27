@@ -3,16 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ settings.app.name }}</title>
-    <link rel="stylesheet" href="/static/style.css">
-    <link rel="icon" href="/static/images/favicon-msu.ico">
+    <title>{% block title %}{{ settings.app.name }}{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- <link rel="icon" href="/static/image/favicon-msu.ico"> -->
+    <link rel="icon" href="/static/image/favicon-emoji.ico">
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
 </head>
 <body>
+    <!-- Navigation Header -->
     <nav class="main-nav">
         <h1>{{ settings.app.name }}</h1>
+        {% if user %}
+        <span class="user-display">
+            {{ user.display_name }} &nbsp; | &nbsp; {{ user.email }}
+        </span>
+        {% endif %}
     </nav>
-    
+
+    <!-- Main Content Area -->
     <main class="container">
         {% block content %}{% endblock %}
     </main>
