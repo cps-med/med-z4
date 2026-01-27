@@ -1,0 +1,25 @@
+{# app/templates/partials/ccow_banner.html #}
+{# HTMX partial - displays current CCOW patient context #}
+<div id="ccow-banner" class="ccow-banner {% if context %}active{% else %}inactive{% endif %}">
+    {% if context and context.patient_id %}
+    <div class="banner-content">
+        <span class="banner-label">ACTIVE PATIENT:</span>
+        <strong>{{ context.patient_name or context.patient_id }}</strong>
+        <span class="banner-icn">({{ context.patient_id }})</span>
+        {% if context.set_by %}
+        <span class="banner-source">Set by {{ context.set_by }}</span>
+        {% endif %}
+        <button class="btn btn-sm btn-outline"
+                hx-delete="/context/clear"
+                hx-swap="none"
+                hx-on::after-request="htmx.trigger('#ccow-banner', 'refresh')">
+            Clear
+        </button>
+    </div>
+    {% else %}
+    <div class="banner-content empty">
+        <span class="banner-label">NO ACTIVE PATIENT</span>
+        <span>Select a patient from the roster below</span>
+    </div>
+    {% endif %}
+</div>

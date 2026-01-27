@@ -2755,24 +2755,21 @@ Use this checklist to track your progress:
 - [ ] Test: Logout invalidates session
 - [ ] Test: Expired/invalid sessions redirect to login
 
-**Phase F: CCOW Integration** (Section 10.2)
-- [ ] Create `app/services/ccow_service.py` for CCOW Vault API communication
-- [ ] Add `CCOWContext` model to `app/models/auth.py`
-- [ ] Create `auth.ccow_contexts` table in database
-- [ ] Update `app/routes/dashboard.py` to join CCOW context
+**Phase F: CCOW Integration** (Section 10.2) - Updated for CCOW v2.1
+- [ ] Create `app/services/ccow_service.py` with X-Session-ID header auth
+- [ ] Update `app/routes/dashboard.py` to get/display CCOW context
 - [ ] Add `/ccow/poll` endpoint for context polling
 - [ ] Add HTMX polling to `dashboard.html` (every 5 seconds)
 - [ ] Add `/patient/select/{icn}` endpoint for setting context
 - [ ] Update "View" button with HTMX to set CCOW context
 - [ ] Add `.patient-selected` CSS styling for highlighted patient
-- [ ] Update logout route to leave CCOW context
-- [ ] Test: Dashboard joins CCOW context on load
-- [ ] Test: Context stored in `auth.ccow_contexts` table
+- [ ] Test: CCOW Vault health check returns v2.1.0
+- [ ] Test: Dashboard displays current CCOW context
 - [ ] Test: HTMX polls for context changes
 - [ ] Test: med-z1 sets context → med-z4 follows
 - [ ] Test: med-z4 sets context (View button) → med-z1 follows
 - [ ] Test: Patient highlighted when selected
-- [ ] Test: Logout leaves CCOW context
+- [ ] Test: Same user in both apps sees same context
 
 ---
 
@@ -2786,12 +2783,13 @@ Once Phase D is complete, proceed with the remaining phases:
 - Add UUID session management with `auth.sessions` table
 - Session validation and expiration handling
 
-**Phase F: CCOW Integration** (Section 10.2)
-- Create CCOW service layer for Vault API communication
-- Add CCOW context tracking to database
-- Join CCOW context on dashboard load
+**Phase F: CCOW Integration** (Section 10.2) - Uses CCOW v2.1 API
+- Create CCOW service layer with X-Session-ID header authentication
+- Get/display current patient context from CCOW Vault
 - HTMX polling for context changes (every 5 seconds)
-- Patient context synchronization with med-z1
+- Patient selection sets context via PUT /ccow/active-patient
+- Bidirectional context synchronization with med-z1
+- No local database table needed (CCOW Vault is source of truth)
 
 **Phase G: Patient Detail Page** (Coming Soon)
 - Create patient detail view
@@ -3470,45 +3468,61 @@ This completes Phase E! You now have full database-backed authentication with bc
 
 ### 10.2.1 Phase F Overview
 
-**Goal:** Integrate med-z4 with the CCOW (Clinical Context Object Workgroup) Vault to enable patient context synchronization with med-z1.
+**Goal:** Integrate med-z4 with the CCOW Context Vault (v2.1) to enable patient context synchronization with med-z1.
 
 **What is CCOW?**
 CCOW allows multiple clinical applications to share patient context. When a clinician selects a patient in one application (med-z1), all other participating applications (med-z4) automatically switch to that same patient context.
 
-**Architecture:**
-- **CCOW Vault** (running on port 8001) - Central context manager
-- **med-z1** (port 8000) - Primary EHR (context manager and participant)
-- **med-z4** (port 8005) - Secondary EHR (context manager and participant)
-- **Bidirectional:** Both applications can set and follow patient context
+**Architecture (CCOW v2.1):**
+- **CCOW Vault** (port 8001) - Central context manager with per-user context isolation
+- **med-z1** (port 8000) - Primary EHR (context participant via cookie auth)
+- **med-z4** (port 8005) - Secondary EHR (context participant via header auth)
+- **Bidirectional:** Both applications can get, set, and clear patient context
+
+**CCOW v2.1 Key Features:**
+- **Per-user context isolation:** Each user has their own patient context (keyed by `user_id`)
+- **Session-based authentication:** Uses `X-Session-ID` header or `session_id` cookie
+- **Shared auth.sessions table:** med-z4 creates sessions in the same table as med-z1
+- **No join/leave protocol:** Simple REST API (GET/PUT/DELETE)
+- **No database table needed:** CCOW Vault maintains context in-memory
 
 **Phase F Tasks:**
-1. **Task F1:** Create CCOW Service Layer for API communication
-2. **Task F2:** Add CCOW Context Models and Database Storage
-3. **Task F3:** Update Dashboard with Context Participation (Join/Follow)
-4. **Task F4:** Add CCOW Polling for Context Changes
-5. **Task F5:** Add Patient Selection to Set Context (Manager Mode)
-6. **Task F6:** Update Logout to Leave CCOW Context
+1. **Task F1:** Create CCOW Service Layer (`ccow_service.py`) - Section 10.2.2
+2. **Task F2:** Update Dashboard Route (context display) - Section 10.2.3
+3. **Task F3:** Add CCOW Polling Endpoint - Section 10.2.4
+4. **Task F4:** Add Patient Selection Endpoint - Section 10.2.5
+5. **Complete Files:** dashboard.html, CSS, dashboard.py - Sections 10.2.6-10.2.8
+6. **Task F5:** Update Logout (Optional) - Section 10.2.9
 
 **Key Concepts:**
-- **Context Token:** Unique identifier for current patient context session
-- **Context Poll:** Periodic check to see if context has changed
-- **Context Participant:** Application that follows context (med-z4)
-- **Context Manager:** Application that sets context (med-z1)
+- **X-Session-ID Header:** med-z4 passes its session UUID to CCOW via this header
+- **User-keyed context:** CCOW extracts `user_id` from session and stores context per-user
+- **Cross-app sync:** Same user logged into both med-z1 and med-z4 sees same patient context
+
+**Reference Documentation:**
+- `docs/reference/med-z4-integration-quickstart.md` - Quick integration guide
+- `docs/reference/ccow-v2.1-testing-guide.md` - Testing with curl/Insomnia
+- `docs/reference/timezone-and-session-management.md` - Session handling patterns
 
 ---
 
 ### 10.2.2 Task F1: Create CCOW Service Layer
 
-Create `app/services/ccow_service.py` to handle all CCOW Vault API communication:
+Create `app/services/ccow_service.py` to handle CCOW Vault v2.1 API communication.
+
+**Key Design:**
+- Uses `X-Session-ID` header to pass med-z4's session UUID to CCOW Vault
+- CCOW Vault validates the session against `auth.sessions` table
+- CCOW extracts `user_id` from session and stores context per-user
+- Simple REST API: GET/PUT/DELETE `/ccow/active-patient`
 
 ```python
 # app/services/ccow_service.py
-# CCOW Vault API integration service
+# CCOW Vault v2.1 API integration service
 
 import httpx
 import logging
 from typing import Optional, Dict, Any
-from datetime import datetime
 
 from config import settings
 
@@ -3516,121 +3530,138 @@ logger = logging.getLogger(__name__)
 
 
 class CCOWService:
-    """Service for CCOW Vault API interactions."""
+    """
+    Service for CCOW Vault v2.1 API interactions.
+
+    Uses X-Session-ID header for authentication (cross-application pattern).
+    CCOW Vault validates the session against the shared auth.sessions table
+    and extracts user_id to provide per-user context isolation.
+    """
 
     def __init__(self):
         self.base_url = settings.ccow.base_url
         self.timeout = 5.0  # 5 second timeout for CCOW calls
 
-    async def join_context(self, user_id: str, session_id: str) -> Optional[Dict[str, Any]]:
+    async def get_active_patient(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
-        Join CCOW context as a participant.
-        Returns context token and current patient ICN if available.
-        """
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/ccow/join",
-                    json={
-                        "application_id": "med-z4",
-                        "user_id": user_id,
-                        "session_id": session_id,
-                    }
-                )
-                response.raise_for_status()
-                data = response.json()
+        Get the current user's active patient context from CCOW Vault.
 
-                logger.info(f"Joined CCOW context: {data.get('context_token')}")
-                return data
+        Args:
+            session_id: med-z4 session UUID (from med_z4_session_id cookie)
 
-        except httpx.TimeoutException:
-            logger.error("CCOW join timeout")
-            return None
-        except httpx.HTTPStatusError as e:
-            logger.error(f"CCOW join failed: {e.response.status_code}")
-            return None
-        except Exception as e:
-            logger.error(f"CCOW join error: {e}")
-            return None
-
-    async def poll_context(self, context_token: str) -> Optional[Dict[str, Any]]:
-        """
-        Poll CCOW for current context.
-        Returns current patient ICN and context status.
+        Returns:
+            Patient context dict with patient_id, set_by, set_at, etc.
+            None if no active patient or on error.
         """
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.get(
-                    f"{self.base_url}/ccow/context",
-                    params={"context_token": context_token}
+                    f"{self.base_url}/ccow/active-patient",
+                    headers={"X-Session-ID": session_id}
                 )
+
+                if response.status_code == 404:
+                    # No active patient for this user
+                    return None
+
                 response.raise_for_status()
                 data = response.json()
 
-                logger.debug(f"CCOW context poll: {data.get('patient_icn')}")
+                logger.debug(f"CCOW get_active_patient: {data.get('patient_id')}")
                 return data
 
         except httpx.TimeoutException:
-            logger.warning("CCOW poll timeout")
+            logger.warning("CCOW get_active_patient timeout")
             return None
         except httpx.HTTPStatusError as e:
-            logger.warning(f"CCOW poll failed: {e.response.status_code}")
+            logger.warning(f"CCOW get_active_patient failed: {e.response.status_code}")
             return None
         except Exception as e:
-            logger.error(f"CCOW poll error: {e}")
+            logger.error(f"CCOW get_active_patient error: {e}")
             return None
 
-    async def leave_context(self, context_token: str) -> bool:
+    async def set_active_patient(self, session_id: str, patient_icn: str) -> bool:
         """
-        Leave CCOW context (on logout).
+        Set the current user's active patient context in CCOW Vault.
+
+        Args:
+            session_id: med-z4 session UUID
+            patient_icn: Patient ICN to set as active
+
+        Returns:
+            True if successful, False otherwise
         """
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/ccow/leave",
-                    json={"context_token": context_token}
-                )
-                response.raise_for_status()
-
-                logger.info(f"Left CCOW context: {context_token}")
-                return True
-
-        except Exception as e:
-            logger.error(f"CCOW leave error: {e}")
-            return False
-
-    async def set_context(self, context_token: str, patient_icn: str) -> bool:
-        """
-        Set patient context (optional - for future use if med-z4 becomes a manager).
-        """
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/ccow/context",
+                response = await client.put(
+                    f"{self.base_url}/ccow/active-patient",
+                    headers={"X-Session-ID": session_id},
                     json={
-                        "context_token": context_token,
-                        "patient_icn": patient_icn
+                        "patient_id": patient_icn,
+                        "set_by": "med-z4"
                     }
                 )
                 response.raise_for_status()
 
-                logger.info(f"Set CCOW context: {patient_icn}")
+                logger.info(f"CCOW set_active_patient: {patient_icn}")
+                return True
+
+        except httpx.TimeoutException:
+            logger.error("CCOW set_active_patient timeout")
+            return False
+        except httpx.HTTPStatusError as e:
+            logger.error(f"CCOW set_active_patient failed: {e.response.status_code}")
+            return False
+        except Exception as e:
+            logger.error(f"CCOW set_active_patient error: {e}")
+            return False
+
+    async def clear_active_patient(self, session_id: str) -> bool:
+        """
+        Clear the current user's active patient context in CCOW Vault.
+
+        Args:
+            session_id: med-z4 session UUID
+
+        Returns:
+            True if successful or no context to clear, False on error
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.delete(
+                    f"{self.base_url}/ccow/active-patient",
+                    headers={"X-Session-ID": session_id}
+                )
+
+                if response.status_code in (200, 204, 404):
+                    # 200 = cleared with response, 204 = cleared, 404 = nothing to clear
+                    logger.info("CCOW clear_active_patient: success")
+                    return True
+
+                response.raise_for_status()
                 return True
 
         except Exception as e:
-            logger.error(f"CCOW set context error: {e}")
+            logger.error(f"CCOW clear_active_patient error: {e}")
             return False
 
-    async def health_check(self) -> bool:
-        """Check if CCOW Vault is available."""
+    async def health_check(self) -> Dict[str, Any]:
+        """
+        Check if CCOW Vault is available and get version info.
+
+        Returns:
+            Health check response dict or error dict
+        """
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.get(
                     f"{self.base_url}{settings.ccow.health_endpoint}"
                 )
-                return response.status_code == 200
-        except Exception:
-            return False
+                if response.status_code == 200:
+                    return response.json()
+                return {"status": "unhealthy", "error": f"HTTP {response.status_code}"}
+        except Exception as e:
+            return {"status": "unreachable", "error": str(e)}
 
 
 # Singleton instance
@@ -3638,63 +3669,32 @@ ccow_service = CCOWService()
 ```
 
 **Verification:**
-- File created at `app/services/ccow_service.py`
-- No syntax errors: `python -c "from app.services.ccow_service import ccow_service; print('CCOW service imported')"`
+```bash
+# File created at app/services/ccow_service.py
+python -c "from app.services.ccow_service import ccow_service; print('CCOW service imported')"
+
+# Test CCOW health check (requires CCOW Vault running on port 8001)
+python -c "
+import asyncio
+from app.services.ccow_service import ccow_service
+result = asyncio.run(ccow_service.health_check())
+print(f'CCOW health: {result}')
+"
+```
+
+**Note:** No database table is needed for CCOW integration. The CCOW Vault maintains context in-memory, and med-z4 simply calls the REST API.
 
 ---
 
-### 10.2.3 Task F2: Add CCOW Context Models and Database Storage
+### 10.2.3 Task F2: Update Dashboard with Context Display
 
-Update `app/models/auth.py` to add CCOW context tracking:
+Update `app/routes/dashboard.py` to get current CCOW context on dashboard load.
 
-```python
-# Add this new model to app/models/auth.py (after AuditLog class)
-
-class CCOWContext(Base):
-    """CCOW context tracking (auth.ccow_contexts table)."""
-    __tablename__ = "ccow_contexts"
-    __table_args__ = {"schema": "auth"}
-
-    context_id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(UUID(as_uuid=True), ForeignKey("auth.sessions.session_id", ondelete="CASCADE"), nullable=False, index=True)
-    context_token = Column(String(255), unique=True, nullable=False, index=True)
-    patient_icn = Column(String(50), index=True)
-    is_active = Column(Boolean, default=True)
-    joined_at = Column(TIMESTAMP, default=datetime.utcnow)
-    last_poll_at = Column(TIMESTAMP, default=datetime.utcnow)
-    left_at = Column(TIMESTAMP)
-```
-
-**Create database migration (if using Alembic) or run SQL directly:**
-
-```sql
--- Run this in PostgreSQL to create the table
-CREATE TABLE auth.ccow_contexts (
-    context_id SERIAL PRIMARY KEY,
-    session_id UUID NOT NULL REFERENCES auth.sessions(session_id) ON DELETE CASCADE,
-    context_token VARCHAR(255) NOT NULL UNIQUE,
-    patient_icn VARCHAR(50),
-    is_active BOOLEAN DEFAULT true,
-    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_poll_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    left_at TIMESTAMP
-);
-
-CREATE INDEX idx_ccow_session ON auth.ccow_contexts(session_id);
-CREATE INDEX idx_ccow_token ON auth.ccow_contexts(context_token);
-CREATE INDEX idx_ccow_patient ON auth.ccow_contexts(patient_icn);
-```
-
-**Verification:**
-- Model added to `app/models/auth.py`
-- Table created in database
-- Verify table exists: `\d auth.ccow_contexts` in psql
-
----
-
-### 10.2.4 Task F3: Update Dashboard with Context Participation
-
-Update `app/routes/dashboard.py` to join CCOW context on dashboard load:
+**Key Changes from Previous Design:**
+- No local database storage needed (CCOW Vault is source of truth)
+- No join/leave protocol - just call GET `/ccow/active-patient`
+- Pass session_id via X-Session-ID header
+- Highlight patient if context already set by another app (e.g., med-z1)
 
 ```python
 # app/routes/dashboard.py
@@ -3709,7 +3709,6 @@ from typing import Optional
 from database import get_db
 from app.services.auth_service import validate_session
 from app.services.ccow_service import ccow_service
-from app.models.auth import CCOWContext
 from config import settings
 
 router = APIRouter()
@@ -3722,7 +3721,7 @@ async def dashboard(
     db: AsyncSession = Depends(get_db),
     session_id: Optional[str] = Cookie(None, alias=settings.session.cookie_name)
 ):
-    """Display patient roster with session validation and CCOW participation."""
+    """Display patient roster with session validation and CCOW context."""
 
     # Validate session against database
     user_info = await validate_session(db, session_id) if session_id else None
@@ -3730,70 +3729,13 @@ async def dashboard(
     if not user_info:
         return RedirectResponse(url="/login", status_code=303)
 
-    # Join CCOW context (or retrieve existing)
-    context_data = None
+    # Get current CCOW context (may have been set by med-z1)
+    # CCOW Vault validates session and returns context for this user
     current_patient_icn = None
+    ccow_context = await ccow_service.get_active_patient(session_id)
 
-    # Check if we already have an active CCOW context for this session
-    result = await db.execute(
-        text("""
-            SELECT context_token, patient_icn
-            FROM auth.ccow_contexts
-            WHERE session_id = :session_id AND is_active = true
-            ORDER BY joined_at DESC
-            LIMIT 1
-        """),
-        {"session_id": session_id}
-    )
-    existing_context = result.fetchone()
-
-    if existing_context:
-        # Use existing context
-        context_token = existing_context[0]
-        current_patient_icn = existing_context[1]
-
-        # Poll for updates
-        context_data = await ccow_service.poll_context(context_token)
-        if context_data and context_data.get("patient_icn") != current_patient_icn:
-            # Context changed - update database
-            current_patient_icn = context_data.get("patient_icn")
-            await db.execute(
-                text("""
-                    UPDATE auth.ccow_contexts
-                    SET patient_icn = :patient_icn, last_poll_at = CURRENT_TIMESTAMP
-                    WHERE context_token = :context_token
-                """),
-                {"patient_icn": current_patient_icn, "context_token": context_token}
-            )
-            await db.commit()
-    else:
-        # Join CCOW context for the first time
-        # NOTE: If another application (e.g., med-z1) has already set a patient context,
-        # the join response will include that patient_icn, and it will be automatically
-        # highlighted in the roster on initial page load.
-        context_data = await ccow_service.join_context(
-            user_id=user_info["user_id"],
-            session_id=session_id
-        )
-
-        if context_data:
-            context_token = context_data.get("context_token")
-            current_patient_icn = context_data.get("patient_icn")  # May be set by another app
-
-            # Store context in database
-            await db.execute(
-                text("""
-                    INSERT INTO auth.ccow_contexts
-                    (session_id, context_token, patient_icn, is_active)
-                    VALUES (:session_id, :context_token, :patient_icn, true)
-                """),
-                {
-                    "session_id": session_id,
-                    "context_token": context_token,
-                    "patient_icn": current_patient_icn
-                }
-            )
-            await db.commit()
+    if ccow_context:
+        current_patient_icn = ccow_context.get("patient_id")
 
     # Query patients from database
     result = await db.execute(
@@ -3830,84 +3772,84 @@ async def dashboard(
             "patients": patients,
             "user": user_info,
             "current_patient_icn": current_patient_icn,
-            "ccow_active": context_data is not None,
+            "ccow_active": ccow_context is not None,
         }
     )
 ```
 
-**Changes Made:**
-- Added CCOW service import
-- Check for existing active CCOW context in database
-- Join CCOW context on first dashboard load
-- **If med-z1 already set a patient context, that patient is automatically highlighted on initial load**
-- Poll CCOW context on subsequent loads
-- Store/update context in `auth.ccow_contexts` table
-- Pass `current_patient_icn` to template
-- Add `is_selected` flag to highlight current patient
+**How It Works:**
+1. User logs into med-z4 (creates session in shared `auth.sessions` table)
+2. Dashboard calls `ccow_service.get_active_patient(session_id)`
+3. CCOW Vault validates session, extracts `user_id`, returns context for that user
+4. If med-z1 already set a patient context for this user, it's returned
+5. Dashboard highlights the selected patient in the roster
+
+**Note:** No local database table is needed. The CCOW Vault is the single source of truth for patient context.
 
 ---
 
-### 10.2.5 Task F4: Add CCOW Polling Endpoint
+### 10.2.4 Task F3: Add CCOW Polling for Context Changes
 
-Create an HTMX endpoint to poll CCOW context every few seconds:
+Add real-time CCOW context synchronization using HTMX polling. The dashboard displays a persistent banner showing the current patient context, which updates automatically every 5 seconds when context changes in other CCOW-participating applications (e.g., med-z1).
 
-Add to `app/routes/dashboard.py`:
+**Step 1: Create the CCOW Banner Partial Template**
+
+Create `app/templates/partials/ccow_banner.html`:
+
+```html
+{# app/templates/partials/ccow_banner.html #}
+{# HTMX partial - displays current CCOW patient context #}
+<div id="ccow-banner" class="ccow-banner {% if context %}active{% else %}inactive{% endif %}">
+    {% if context and context.patient_id %}
+    <div class="banner-content">
+        <span class="banner-label">ACTIVE PATIENT:</span>
+        <strong>{{ context.patient_name or context.patient_id }}</strong>
+        <span class="banner-icn">({{ context.patient_id }})</span>
+        {% if context.set_by %}
+        <span class="banner-source">Set by {{ context.set_by }}</span>
+        {% endif %}
+        <button class="btn btn-sm btn-outline"
+                hx-delete="/context/clear"
+                hx-swap="none"
+                hx-on::after-request="htmx.trigger('#ccow-banner', 'refresh')">
+            Clear
+        </button>
+    </div>
+    {% else %}
+    <div class="banner-content empty">
+        <span class="banner-label">NO ACTIVE PATIENT</span>
+        <span>Select a patient from the roster below</span>
+    </div>
+    {% endif %}
+</div>
+```
+
+**Step 2: Add the Context Banner Route**
+
+Add the `/context/banner` endpoint to `app/routes/dashboard.py`. This endpoint is polled by HTMX to keep the banner in sync with CCOW Vault:
 
 ```python
-@router.get("/ccow/poll")
-async def ccow_poll(
+@router.get("/context/banner")
+async def get_context_banner(
     request: Request,
     db: AsyncSession = Depends(get_db),
     session_id: Optional[str] = Cookie(None, alias=settings.session.cookie_name)
 ):
     """
-    HTMX endpoint to poll CCOW context.
-    Returns HTML fragment showing current patient or empty if no change.
+    HTMX endpoint to get current CCOW context banner.
+    Polled every 5 seconds to detect context changes from other apps.
+    Returns the ccow_banner.html partial.
     """
-    if not session_id:
-        return ""
+    context = None
 
-    # Get current context from database
-    result = await db.execute(
-        text("""
-            SELECT context_token, patient_icn
-            FROM auth.ccow_contexts
-            WHERE session_id = :session_id AND is_active = true
-            ORDER BY joined_at DESC
-            LIMIT 1
-        """),
-        {"session_id": session_id}
-    )
-    context_row = result.fetchone()
+    if session_id:
+        # Get current context from CCOW Vault
+        ccow_response = await ccow_service.get_active_patient(session_id)
 
-    if not context_row:
-        return ""
+        if ccow_response and ccow_response.get("patient_id"):
+            patient_icn = ccow_response.get("patient_id")
 
-    context_token = context_row[0]
-    stored_patient_icn = context_row[1]
-
-    # Poll CCOW for current context
-    context_data = await ccow_service.poll_context(context_token)
-
-    if not context_data:
-        return ""
-
-    current_patient_icn = context_data.get("patient_icn")
-
-    # If context changed, update database and return notification
-    if current_patient_icn != stored_patient_icn:
-        await db.execute(
-            text("""
-                UPDATE auth.ccow_contexts
-                SET patient_icn = :patient_icn, last_poll_at = CURRENT_TIMESTAMP
-                WHERE context_token = :context_token
-            """),
-            {"patient_icn": current_patient_icn, "context_token": context_token}
-        )
-        await db.commit()
-
-        # Get patient details
-        if current_patient_icn:
+            # Look up patient name for display
             result = await db.execute(
                 text("""
                     SELECT name_display
@@ -3915,51 +3857,168 @@ async def ccow_poll(
                     WHERE icn = :icn
                     LIMIT 1
                 """),
-                {"icn": current_patient_icn}
+                {"icn": patient_icn}
             )
             patient_row = result.fetchone()
-            patient_name = patient_row[0] if patient_row else "Unknown Patient"
 
-            # Return HTMX fragment to refresh page or show notification
-            return f"""
-            <div hx-swap-oob="true" id="context-notification">
-                <div class="notification info">
-                    Context changed to: {patient_name} (ICN: {current_patient_icn})
-                    <button hx-get="/dashboard" hx-target="body" hx-swap="outerHTML">
-                        Refresh
-                    </button>
-                </div>
-            </div>
-            """
+            context = {
+                "patient_id": patient_icn,
+                "patient_name": patient_row[0] if patient_row else None,
+                "set_by": ccow_response.get("set_by", "unknown")
+            }
 
-    return ""  # No change
+    return templates.TemplateResponse(
+        "partials/ccow_banner.html",
+        {
+            "request": request,
+            "context": context
+        }
+    )
 ```
 
-**Update dashboard.html to add polling:**
+**Step 3: Update Dashboard Template**
 
-Add this to `app/templates/dashboard.html` in the content block:
+Update `app/templates/dashboard.html` to include the CCOW banner partial at the top of the content block, immediately after `{% block content %}`:
 
 ```html
-<!-- CCOW Context Notification Area -->
-<div id="context-notification"
-     hx-get="/ccow/poll"
-     hx-trigger="every 5s"
-     hx-swap="outerHTML">
+{% block content %}
+<!-- CCOW Context Banner (polled every 5 seconds) -->
+<div id="ccow-banner-container"
+     hx-get="/context/banner"
+     hx-trigger="load, refresh, every 5s"
+     hx-swap="innerHTML">
+    {% include "partials/ccow_banner.html" %}
 </div>
 
-<!-- Show current context -->
-{% if current_patient_icn %}
-<div class="context-banner">
-    <strong>Current Context:</strong> Patient ICN {{ current_patient_icn }}
-</div>
-{% endif %}
+<!-- Rest of dashboard content (patient roster, etc.) -->
 ```
+
+**Step 4: Add CSS for the Banner**
+
+Add to `app/static/css/style.css`:
+
+```css
+/* CCOW Context Banner */
+.ccow-banner {
+    padding: 12px 16px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+}
+
+.ccow-banner.active {
+    background-color: var(--color-primary-light);
+    border: 1px solid var(--color-primary);
+}
+
+.ccow-banner.inactive {
+    background-color: var(--color-gray-100);
+    border: 1px solid var(--color-gray-300);
+}
+
+.ccow-banner .banner-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.ccow-banner .banner-content.empty {
+    color: var(--color-gray-600);
+}
+
+.ccow-banner .banner-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-primary-dark);
+}
+
+.ccow-banner.inactive .banner-label {
+    color: var(--color-gray-500);
+}
+
+.ccow-banner .banner-icn {
+    font-family: monospace;
+    font-size: 0.875rem;
+    color: var(--color-gray-600);
+}
+
+.ccow-banner .banner-source {
+    font-size: 0.75rem;
+    color: var(--color-gray-500);
+    margin-left: auto;
+    margin-right: 8px;
+}
+
+.ccow-banner .btn {
+    margin-left: auto;
+}
+
+.ccow-banner .banner-source + .btn {
+    margin-left: 0;
+}
+```
+
+**Step 5: Add the Clear Context Route**
+
+The Clear button in `ccow_banner.html` calls `DELETE /context/clear`. Add this route to `app/routes/dashboard.py`:
+
+```python
+@router.delete("/context/clear")
+async def clear_context(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    session_id: Optional[str] = Cookie(None, alias=settings.session.cookie_name)
+):
+    """
+    Clear the current CCOW patient context.
+    Called when user clicks "Clear" button in the CCOW banner.
+    Returns JSON response; HTMX will trigger banner refresh.
+    """
+    if not session_id:
+        return {"success": False, "error": "No session"}
+
+    # Validate session
+    user_info = await validate_session(db, session_id) if session_id else None
+    if not user_info:
+        return {"success": False, "error": "Invalid session"}
+
+    # Clear context in CCOW Vault
+    success = await ccow_service.clear_active_patient(session_id)
+
+    if success:
+        return {"success": True, "message": "Context cleared"}
+    else:
+        return {"success": False, "error": "Failed to clear context"}
+```
+
+**Note:** The banner template's Clear button uses `hx-on::after-request="htmx.trigger('#ccow-banner', 'refresh')"` to trigger a banner refresh after the DELETE completes, so the UI updates automatically.
+
+**How Polling Works:**
+
+1. Dashboard loads and includes `ccow_banner.html` with initial context (from Task F2)
+2. HTMX polls `GET /context/banner` every 5 seconds
+3. Endpoint queries CCOW Vault via `ccow_service.get_active_patient(session_id)`
+4. Returns rendered `ccow_banner.html` partial with current context
+5. HTMX swaps the new banner HTML into `#ccow-banner-container`
+6. If context changed (e.g., user selected different patient in med-z1), banner updates automatically
+
+**Testing:**
+
+1. Open med-z4 dashboard in one browser tab
+2. Open med-z1 in another tab (same user session)
+3. Select a patient in med-z1
+4. Within 5 seconds, med-z4 banner should update to show the selected patient
+5. Click "Clear" button in med-z4 to clear context (both apps should reflect this)
 
 ---
 
-### 10.2.6 Task F5: Add Patient Selection to Set Context
+### 10.2.5 Task F4: Add Patient Selection to Set Context
 
-Allow users to set CCOW context by clicking the "View" button on any patient in the roster. This makes med-z4 a **context manager** (able to set context), not just a participant (following context).
+Allow users to set CCOW context by clicking the "View" button on any patient in the roster. This makes med-z4 a **context manager** (able to set context for all CCOW-participating apps).
 
 **Add patient selection endpoint to `app/routes/dashboard.py`:**
 
@@ -3983,39 +4042,10 @@ async def select_patient(
     if not user_info:
         return {"success": False, "error": "Invalid session"}
 
-    # Get CCOW context token
-    result = await db.execute(
-        text("""
-            SELECT context_token
-            FROM auth.ccow_contexts
-            WHERE session_id = :session_id AND is_active = true
-            ORDER BY joined_at DESC
-            LIMIT 1
-        """),
-        {"session_id": session_id}
-    )
-    context_row = result.fetchone()
-
-    if not context_row:
-        return {"success": False, "error": "No active CCOW context"}
-
-    context_token = context_row[0]
-
-    # Set CCOW context
-    success = await ccow_service.set_context(context_token, icn)
+    # Set CCOW context via X-Session-ID header
+    success = await ccow_service.set_active_patient(session_id, icn)
 
     if success:
-        # Update database
-        await db.execute(
-            text("""
-                UPDATE auth.ccow_contexts
-                SET patient_icn = :patient_icn, last_poll_at = CURRENT_TIMESTAMP
-                WHERE context_token = :context_token
-            """),
-            {"patient_icn": icn, "context_token": context_token}
-        )
-        await db.commit()
-
         # Get patient name for response
         result = await db.execute(
             text("""
@@ -4038,12 +4068,10 @@ async def select_patient(
         return {"success": False, "error": "Failed to set CCOW context"}
 ```
 
-**Update patient roster table in `app/templates/dashboard.html`:**
-
-Add CSS class for highlighting selected patient:
+**Add CSS for highlighting selected patient in `app/static/css/style.css`:**
 
 ```css
-/* Add to app/static/style.css */
+/* Selected patient highlighting */
 .patient-selected {
     background-color: var(--color-primary-light);
     font-weight: 600;
@@ -4054,7 +4082,7 @@ Add CSS class for highlighting selected patient:
 }
 ```
 
-Update the patient table row to include selection highlighting and HTMX on the View button:
+**Update patient table in `app/templates/dashboard.html`:**
 
 ```html
 <!-- In dashboard.html patient table -->
@@ -4086,82 +4114,459 @@ Update the patient table row to include selection highlighting and HTMX on the V
 </tbody>
 ```
 
-**How it works:**
+**How It Works:**
 
 1. **User clicks "View" button** on a patient row
 2. **HTMX POST request** to `/patient/select/{icn}`
-3. **Backend**:
-   - Validates session and gets active CCOW context token
-   - Calls `ccow_service.set_context()` to update CCOW Vault
-   - Updates local database with new `patient_icn`
-4. **JavaScript alert** shows confirmation: "Context set to: [Patient Name]"
-5. **Page reloads** to show updated highlighting
-6. **Patient row** with `is_selected=true` gets `.patient-selected` CSS class
-7. **Other applications** (like med-z1) poll CCOW and see the context change
+3. **Backend** calls `ccow_service.set_active_patient(session_id, icn)`
+4. **CCOW Vault** validates session, extracts `user_id`, stores context
+5. **Response** returns patient name and ICN
+6. **JavaScript alert** shows confirmation
+7. **Page reloads** to show updated highlighting
+8. **Other applications** (med-z1) poll CCOW and see the context change
+
+**Verification:**
+```bash
+# 1. Click "View" button on a patient in med-z4
+# 2. Alert shows: "Context set to: [Patient Name] (ICN: [ICN])"
+# 3. Page reloads with patient row highlighted
+
+# 4. Verify via curl:
+SESSION_ID="<your-med-z4-session-uuid>"
+curl -X GET http://localhost:8001/ccow/active-patient \
+  -H "X-Session-ID: $SESSION_ID"
+# Should return the patient you selected
+
+# 5. Open med-z1, wait 5 seconds
+# med-z1 should show context change notification
+```
 
 **Future Enhancement (Phase G):**
-Replace the `alert()` and `window.location.reload()` with navigation to patient detail page:
+Navigate to patient detail page instead of just showing alert:
 ```javascript
-// Future: Navigate to patient detail page
 window.location.href = '/patient/' + data.patient_icn;
 ```
 
-**Verification:**
-- Click "View" button on a patient
-- Alert shows: "Context set to: [Patient Name] (ICN: [ICN])"
-- Page reloads with patient row highlighted
-- Check database: `SELECT patient_icn FROM auth.ccow_contexts WHERE is_active = true;`
-- Open med-z1, wait 5 seconds, should see context change notification
+---
+
+### 10.2.6 Complete Template: dashboard.html with CCOW Integration
+
+This is the **complete updated `dashboard.html`** with all CCOW integration from Tasks F2-F4. Copy this entire file to replace your existing `app/templates/dashboard.html`.
+
+```html
+{# app/templates/dashboard.html - Complete template with CCOW integration #}
+{% extends "base.html" %}
+
+{% block title %}Patient Roster - {{ settings.app.name }}{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <h2>Patient Roster</h2>
+    <div class="header-actions">
+        {% if user %}
+        <span class="user-info">{{ user.display_name }}</span>
+        {% endif %}
+        <form method="POST" action="/logout" style="display: inline;">
+            <button type="submit" class="btn-secondary">Logout</button>
+        </form>
+    </div>
+</div>
+
+{# ========== CCOW INTEGRATION (Phase F) ========== #}
+
+{# CCOW Context Notification Area - polls every 5 seconds #}
+<div id="context-notification"
+     hx-get="/ccow/poll{% if current_patient_icn %}?current_icn={{ current_patient_icn }}{% endif %}"
+     hx-trigger="every 5s"
+     hx-swap="outerHTML">
+</div>
+
+{# Show current CCOW context banner if patient is selected #}
+{% if current_patient_icn %}
+<div class="context-banner">
+    <strong>Current Context:</strong> Patient ICN {{ current_patient_icn }}
+    {% if ccow_active %}
+    <span class="ccow-status">(CCOW Active)</span>
+    {% endif %}
+</div>
+{% endif %}
+
+{# ========== END CCOW INTEGRATION ========== #}
+
+<div class="patient-roster-card">
+    <table class="patient-table">
+        <thead>
+            <tr>
+                <th>Patient Name</th>
+                <th>ICN</th>
+                <th>DOB</th>
+                <th>SSN (Last 4)</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for patient in patients %}
+            {# Add patient-selected class if this patient is the current CCOW context #}
+            <tr class="{% if patient.is_selected %}patient-selected{% endif %}">
+                <td class="patient-name">{{ patient.name_display }}</td>
+                <td>{{ patient.icn }}</td>
+                <td>{{ patient.dob }}</td>
+                <td>{{ patient.ssn_last4 }}</td>
+                <td>
+                    {# View button sets CCOW context via HTMX POST #}
+                    <button
+                        class="btn-sm btn-primary"
+                        hx-post="/patient/select/{{ patient.icn }}"
+                        hx-swap="none"
+                        hx-on::after-request="
+                            if(event.detail.successful) {
+                                const data = JSON.parse(event.detail.xhr.response);
+                                if(data.success) {
+                                    alert('Context set to: ' + data.patient_name + ' (ICN: ' + data.patient_icn + ')');
+                                    window.location.reload();
+                                } else {
+                                    alert('Error: ' + data.error);
+                                }
+                            }
+                        ">
+                        View
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="dashboard-footer">
+    <p>Showing {{ patients|length }} patients</p>
+
+    <div class="health-checks">
+        <button hx-get="/health/ccow"
+                hx-target="#health-results"
+                hx-swap="innerHTML"
+                class="btn-sm">
+            Check CCOW
+        </button>
+
+        <button hx-get="/health/vista"
+                hx-target="#health-results"
+                hx-swap="innerHTML"
+                class="btn-sm">
+            Check VistA
+        </button>
+
+        <div id="health-results"></div>
+    </div>
+</div>
+{% endblock %}
+```
 
 ---
 
-### 10.2.7 Task F6: Update Logout to Leave CCOW Context
+### 10.2.7 Complete CSS: CCOW Styles for style.css
 
-Update `app/routes/auth.py` logout route to leave CCOW context:
+Add these styles to `app/static/css/style.css` for CCOW integration:
+
+```css
+/* ========== CCOW Integration Styles (Phase F) ========== */
+
+/* Context notification banner */
+.notification {
+    padding: 12px 16px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.notification.info {
+    background-color: var(--color-primary-light, #d1fae5);
+    border: 1px solid var(--color-primary, #10b981);
+    color: var(--color-primary-dark, #065f46);
+}
+
+.notification.warning {
+    background-color: #fef3c7;
+    border: 1px solid #f59e0b;
+    color: #92400e;
+}
+
+.notification button {
+    flex-shrink: 0;
+}
+
+/* Current context banner */
+.context-banner {
+    background-color: var(--color-primary-light, #d1fae5);
+    padding: 8px 16px;
+    border-radius: 4px;
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.context-banner .ccow-status {
+    font-size: 0.85em;
+    color: var(--color-primary, #10b981);
+}
+
+/* Selected patient row highlighting */
+.patient-selected {
+    background-color: var(--color-primary-light, #d1fae5) !important;
+}
+
+.patient-selected td {
+    font-weight: 600;
+}
+
+.patient-selected .patient-name {
+    color: var(--color-primary-dark, #065f46);
+}
+
+/* Primary button style for View button */
+.btn-primary,
+.btn-sm.btn-primary {
+    background-color: var(--color-primary, #10b981);
+    color: white;
+    border: none;
+    cursor: pointer;
+}
+
+.btn-primary:hover,
+.btn-sm.btn-primary:hover {
+    background-color: var(--color-primary-dark, #059669);
+}
+
+/* ========== End CCOW Integration Styles ========== */
+```
+
+---
+
+### 10.2.8 Complete Route: dashboard.py with All Endpoints
+
+This is the **complete updated `dashboard.py`** with all CCOW endpoints. Copy this entire file to replace your existing `app/routes/dashboard.py`.
 
 ```python
-# app/routes/auth.py - Update logout function
+# app/routes/dashboard.py
+# Dashboard routes with CCOW integration (Phase F)
 
-from app.services.ccow_service import ccow_service
+from fastapi import APIRouter, Request, Cookie, Depends
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
+from typing import Optional
+
+from database import get_db
+from app.services.auth_service import validate_session
+from app.services.ccow_service import ccow_service
+from config import settings
+
+router = APIRouter()
+templates = Jinja2Templates(directory="app/templates")
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    session_id: Optional[str] = Cookie(None, alias=settings.session.cookie_name)
+):
+    """Display patient roster with session validation and CCOW context."""
+
+    # Validate session against database
+    user_info = await validate_session(db, session_id) if session_id else None
+
+    if not user_info:
+        return RedirectResponse(url="/login", status_code=303)
+
+    # Get current CCOW context (may have been set by med-z1)
+    current_patient_icn = None
+    ccow_context = await ccow_service.get_active_patient(session_id)
+
+    if ccow_context:
+        current_patient_icn = ccow_context.get("patient_id")
+
+    # Query patients from database
+    result = await db.execute(
+        text("""
+            SELECT
+                patient_key,
+                icn,
+                name_display,
+                dob,
+                ssn_last4
+            FROM clinical.patient_demographics
+            ORDER BY name_last, name_first
+            LIMIT 50
+        """)
+    )
+
+    patients = [
+        {
+            "patient_key": row[0],
+            "icn": row[1],
+            "name_display": row[2],
+            "dob": row[3].strftime("%Y-%m-%d") if row[3] else "N/A",
+            "ssn_last4": row[4] or "N/A",
+            "is_selected": row[1] == current_patient_icn
+        }
+        for row in result.fetchall()
+    ]
+
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {
+            "request": request,
+            "settings": settings,
+            "patients": patients,
+            "user": user_info,
+            "current_patient_icn": current_patient_icn,
+            "ccow_active": ccow_context is not None,
+        }
+    )
+
+
+@router.get("/ccow/poll")
+async def ccow_poll(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    session_id: Optional[str] = Cookie(None, alias=settings.session.cookie_name),
+    current_icn: Optional[str] = None
+):
+    """
+    HTMX endpoint to poll CCOW context.
+    Returns HTML fragment with notification if context changed.
+    """
+    if not session_id:
+        return ""
+
+    # Get current CCOW context
+    ccow_context = await ccow_service.get_active_patient(session_id)
+
+    if not ccow_context:
+        # No context set - if UI shows a patient, that's stale
+        if current_icn:
+            return """
+            <div hx-swap-oob="true" id="context-notification">
+                <div class="notification warning">
+                    Patient context has been cleared.
+                    <button class="btn-sm" hx-get="/dashboard" hx-target="body" hx-swap="outerHTML">
+                        Refresh
+                    </button>
+                </div>
+            </div>
+            """
+        return ""
+
+    ccow_patient_icn = ccow_context.get("patient_id")
+
+    # If context changed from what UI is showing
+    if ccow_patient_icn and ccow_patient_icn != current_icn:
+        # Get patient details for notification
+        result = await db.execute(
+            text("""
+                SELECT name_display
+                FROM clinical.patient_demographics
+                WHERE icn = :icn
+                LIMIT 1
+            """),
+            {"icn": ccow_patient_icn}
+        )
+        patient_row = result.fetchone()
+        patient_name = patient_row[0] if patient_row else "Unknown Patient"
+
+        # Return HTMX fragment to show notification
+        return f"""
+        <div hx-swap-oob="true" id="context-notification">
+            <div class="notification info">
+                Context changed to: {patient_name} (ICN: {ccow_patient_icn})
+                <button class="btn-sm" hx-get="/dashboard" hx-target="body" hx-swap="outerHTML">
+                    Refresh
+                </button>
+            </div>
+        </div>
+        """
+
+    return ""  # No change
+
+
+@router.post("/patient/select/{icn}")
+async def select_patient(
+    icn: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    session_id: Optional[str] = Cookie(None, alias=settings.session.cookie_name)
+):
+    """
+    Set CCOW context to the selected patient.
+    Called when user clicks "View" button on a patient.
+    """
+    if not session_id:
+        return {"success": False, "error": "No session"}
+
+    # Validate session
+    user_info = await validate_session(db, session_id)
+    if not user_info:
+        return {"success": False, "error": "Invalid session"}
+
+    # Set CCOW context via X-Session-ID header
+    success = await ccow_service.set_active_patient(session_id, icn)
+
+    if success:
+        # Get patient name for response
+        result = await db.execute(
+            text("""
+                SELECT name_display
+                FROM clinical.patient_demographics
+                WHERE icn = :icn
+                LIMIT 1
+            """),
+            {"icn": icn}
+        )
+        patient_row = result.fetchone()
+        patient_name = patient_row[0] if patient_row else "Unknown Patient"
+
+        return {
+            "success": True,
+            "patient_name": patient_name,
+            "patient_icn": icn
+        }
+    else:
+        return {"success": False, "error": "Failed to set CCOW context"}
+```
+
+---
+
+### 10.2.9 Task F5: Update Logout to Clear CCOW Context (Optional)
+
+> **Note:** This task is optional. The recommended approach is to NOT clear context on logout.
+
+Optionally clear CCOW context when user logs out of med-z4. This is **optional** because:
+
+- **CCOW context is per-user**, not per-session
+- User may still be logged into med-z1 and want to keep their patient context
+- The CCOW Vault design preserves context across login/logout cycles
+
+**Decision: Do NOT clear context on logout (recommended)**
+
+The recommended approach is to leave the patient context intact:
+
+```python
+# app/routes/auth.py - Logout WITHOUT clearing CCOW context (recommended)
 
 @router.post("/logout")
 async def logout(request: Request, db: AsyncSession = Depends(get_db)):
-    """Invalidate session, leave CCOW context, and redirect to login."""
+    """Invalidate session and redirect to login. CCOW context preserved."""
 
     session_id = request.cookies.get(settings.session.cookie_name)
 
     if session_id:
-        # Get CCOW context token before invalidating session
-        result = await db.execute(
-            text("""
-                SELECT context_token
-                FROM auth.ccow_contexts
-                WHERE session_id = :session_id AND is_active = true
-                LIMIT 1
-            """),
-            {"session_id": session_id}
-        )
-        context_row = result.fetchone()
-
-        if context_row:
-            context_token = context_row[0]
-
-            # Leave CCOW context
-            await ccow_service.leave_context(context_token)
-
-            # Mark context as inactive
-            await db.execute(
-                text("""
-                    UPDATE auth.ccow_contexts
-                    SET is_active = false, left_at = CURRENT_TIMESTAMP
-                    WHERE context_token = :context_token
-                """),
-                {"context_token": context_token}
-            )
-            await db.commit()
-
-        # Invalidate session
+        # Invalidate session in database
         await invalidate_session(db, session_id)
 
     response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
@@ -4170,17 +4575,48 @@ async def logout(request: Request, db: AsyncSession = Depends(get_db)):
     return response
 ```
 
+**Alternative: Clear context on logout**
+
+If you want med-z4 logout to clear the patient context:
+
+```python
+# app/routes/auth.py - Logout WITH CCOW context clearing (alternative)
+
+from app.services.ccow_service import ccow_service
+
+@router.post("/logout")
+async def logout(request: Request, db: AsyncSession = Depends(get_db)):
+    """Invalidate session, clear CCOW context, and redirect to login."""
+
+    session_id = request.cookies.get(settings.session.cookie_name)
+
+    if session_id:
+        # Clear CCOW context (optional - removes patient selection)
+        await ccow_service.clear_active_patient(session_id)
+
+        # Invalidate session in database
+        await invalidate_session(db, session_id)
+
+    response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie(key=settings.session.cookie_name)
+
+    return response
+```
+
+**When to Clear Context:**
+- ✅ Clear if: User is switching workstations or ending shift
+- ❌ Don't clear if: User is just refreshing session or switching apps
+
 ---
 
-### 10.2.8 Phase F Verification
+### 10.2.10 Phase F Verification
 
 **Complete End-to-End Test:**
 
-1. **Ensure CCOW Vault is running:**
+1. **Ensure CCOW Vault v2.1 is running:**
    ```bash
-   # Check CCOW health
    curl http://localhost:8001/ccow/health
-   # Expected: {"status": "healthy"}
+   # Expected: {"status": "healthy", "version": "2.1.0", ...}
    ```
 
 2. **Start med-z4:**
@@ -4188,37 +4624,30 @@ async def logout(request: Request, db: AsyncSession = Depends(get_db)):
    uvicorn app.main:app --reload --port 8005
    ```
 
-3. **Test CCOW join with existing context:**
-   - In med-z1, select a patient (e.g., ICN: 1234567V890)
-   - Login to med-z4 (fresh session)
+3. **Test context display with existing context:**
+   - In med-z1, login and select a patient (e.g., ICN100001)
+   - Login to med-z4 with **same user credentials**
    - Navigate to dashboard
    - **Dashboard should automatically highlight the patient selected in med-z1**
-   - Check database:
-   ```sql
-   SELECT context_token, patient_icn, is_active
-   FROM auth.ccow_contexts
-   ORDER BY joined_at DESC
-   LIMIT 1;
-   ```
-   - Should see new context record with `is_active = true` and `patient_icn = '1234567V890'`
+   - No database table needed - CCOW Vault is the source of truth
 
 4. **Test context synchronization (med-z1 → med-z4):**
-   - In med-z1, select a patient (this sets CCOW context)
+   - In med-z1, select a different patient
    - Wait 5 seconds (HTMX polling interval)
-   - med-z4 dashboard should show notification with patient context
-   - Refresh should highlight the selected patient in the roster
+   - med-z4 dashboard should show notification: "Context changed to: [Patient Name]"
+   - Click "Refresh" to highlight the new patient
 
 5. **Test patient selection (med-z4 → CCOW):**
    - In med-z4, click "View" button on a patient
    - Alert should show: "Context set to: [Patient Name] (ICN: [ICN])"
    - Page reloads and selected patient row is highlighted
-   - Check database:
-   ```sql
-   SELECT patient_icn FROM auth.ccow_contexts
-   WHERE is_active = true
-   ORDER BY joined_at DESC LIMIT 1;
+   - Verify via curl:
+   ```bash
+   # Get your med-z4 session ID from browser cookies
+   curl http://localhost:8001/ccow/active-patient \
+     -H "X-Session-ID: <your-session-uuid>"
+   # Should return the patient you selected
    ```
-   - Should match the selected patient's ICN
 
 6. **Test bidirectional context (med-z4 → med-z1):**
    - In med-z4, select a different patient
@@ -4226,93 +4655,125 @@ async def logout(request: Request, db: AsyncSession = Depends(get_db)):
    - Check med-z1 - should show context change notification
    - Both applications now share the same patient context
 
-7. **Test CCOW leave:**
-   - Click logout in med-z4
-   - Check database:
-   ```sql
-   SELECT is_active, left_at
-   FROM auth.ccow_contexts
-   ORDER BY joined_at DESC
-   LIMIT 1;
+7. **Test cross-application sync script:**
+   ```bash
+   # Full test script from docs/reference/ccow-v2.1-testing-guide.md
+   # Login to med-z1, set patient, query from med-z4 session
    ```
-   - Should see `is_active = false` and `left_at` timestamp
 
 **Success Criteria:**
-- ✅ Dashboard joins CCOW context on load (participant mode)
-- ✅ **If patient already selected in med-z1, it's automatically highlighted on first med-z4 dashboard load**
-- ✅ CCOW context stored in database
+- ✅ CCOW Vault health check returns version 2.1.0
+- ✅ Dashboard displays patient context from CCOW Vault
+- ✅ **If patient already selected in med-z1, it's automatically highlighted in med-z4**
 - ✅ HTMX polls for context changes every 5 seconds
 - ✅ Context changes from med-z1 trigger notifications in med-z4
-- ✅ Clicking "View" button sets CCOW context (manager mode)
+- ✅ Clicking "View" button sets CCOW context
 - ✅ med-z4 can set context that med-z1 follows (bidirectional)
 - ✅ Currently selected patient highlighted in roster
-- ✅ Alert confirms patient selection
-- ✅ Logout leaves CCOW context
-- ✅ Multiple sessions can coexist with separate contexts
+- ✅ Same user in both apps sees same patient context
+- ✅ No `auth.ccow_contexts` table needed (removed from design)
 
 ---
 
-### 10.2.9 Troubleshooting Phase F
+### 10.2.11 Troubleshooting Phase F
 
-**Issue: "CCOW join timeout" errors**
+**Issue: "Missing authentication" from CCOW Vault**
+
+**Cause:** med-z4 not passing session via X-Session-ID header
 
 **Solution:**
-- Verify CCOW Vault is running: `curl http://localhost:8001/ccow/health`
-- Check `CCOW_BASE_URL` in `.env` matches vault address
-- Ensure no firewall blocking port 8001
+```python
+# Verify ccow_service.py passes header correctly
+headers={"X-Session-ID": session_id}
+```
 
 ---
 
-**Issue: Context not updating when patient selected in med-z1**
+**Issue: "Invalid or expired session" from CCOW Vault**
+
+**Cause:** Session not found in `auth.sessions` or expired
 
 **Solution:**
-- Check HTMX polling is active: inspect browser network tab for `/ccow/poll` requests every 5 seconds
-- Verify med-z1 is setting context correctly
-- Check `last_poll_at` timestamp is updating: `SELECT last_poll_at FROM auth.ccow_contexts ORDER BY joined_at DESC LIMIT 1;`
+```bash
+# Check session exists in database
+psql -U postgres -d medz1 -c "
+  SELECT session_id, user_id, is_active, expires_at
+  FROM auth.sessions
+  WHERE session_id = '<your-session-uuid>'::UUID;
+"
+
+# If expired, re-login to med-z4
+```
 
 ---
 
-**Issue: Multiple context records for same session**
+**Issue: Context not syncing between med-z1 and med-z4**
+
+**Cause:** Different users logged in, or different CCOW Vault URLs
 
 **Solution:**
-- Check query filters `is_active = true` to get only active context
-- Old contexts are kept for audit purposes with `is_active = false`
-- This is expected behavior
+1. Verify both apps use same user credentials (same `user_id`)
+2. Check both apps point to same CCOW Vault:
+   ```bash
+   grep CCOW_BASE_URL med-z1/.env
+   grep CCOW_BASE_URL med-z4/.env
+   # Should both be: http://localhost:8001
+   ```
+3. Verify context is keyed by `user_id`:
+   ```bash
+   # Query CCOW from both sessions - should return same patient
+   curl http://localhost:8001/ccow/active-patient -H "X-Session-ID: <med-z1-session>"
+   curl http://localhost:8001/ccow/active-patient -H "X-Session-ID: <med-z4-session>"
+   ```
 
 ---
 
-**Issue: Patient not highlighting in roster**
+**Issue: HTMX polling not working**
 
 **Solution:**
-- Verify `is_selected` logic in dashboard route
-- Check `current_patient_icn` matches patient `icn` in database
-- Add CSS for `.patient-selected` class to highlight row
+1. Check browser network tab for `/ccow/poll` requests every 5 seconds
+2. Verify HTMX is loaded: check for `htmx` in browser console
+3. Check for JavaScript errors in console
+4. Verify `hx-trigger="every 5s"` is set on the notification div
 
 ---
 
-**Issue: "View" button doesn't set context or shows error**
+**Issue: "View" button doesn't set context**
 
 **Solution:**
-- Check browser console for JavaScript errors
-- Verify `/patient/select/{icn}` endpoint is registered in dashboard router
-- Ensure CCOW context token exists: `SELECT context_token FROM auth.ccow_contexts WHERE is_active = true;`
-- Check CCOW Vault received the set_context call (check vault logs)
-- Verify response JSON has `success: true`
-- If alert doesn't show, check HTMX `hx-on::after-request` syntax
+1. Check browser console for JavaScript errors
+2. Verify `/patient/select/{icn}` endpoint is registered
+3. Check response JSON has `success: true`
+4. If alert doesn't show, verify HTMX `hx-on::after-request` syntax
 
 ---
 
-**Issue: med-z1 not receiving context changes from med-z4**
+**Issue: CCOW Vault version shows 2.0.0 instead of 2.1.0**
+
+**Cause:** CCOW service running old code
 
 **Solution:**
-- Verify both applications use the same CCOW Vault (same `CCOW_BASE_URL`)
-- Check med-z1 is polling CCOW context (should see polls every 5 seconds in network tab)
-- Verify context_token is shared across applications (check vault state)
-- Check CCOW Vault logs to confirm both apps joined the same context session
+```bash
+# Restart CCOW Vault to pick up X-Session-ID support
+pkill -f "uvicorn ccow.main"
+cd /path/to/med-z1
+uvicorn ccow.main:app --reload --port 8001
+
+# Verify version
+curl http://localhost:8001/ccow/health | grep version
+# Should show: "version": "2.1.0"
+```
 
 ---
 
-This completes Phase F! You now have full bidirectional CCOW integration with med-z4 as both a context manager (can set context) and participant (can follow context changes).
+**Reference Documentation:**
+- `docs/reference/ccow-v2.1-testing-guide.md` - Complete curl/Insomnia test suite
+- `docs/reference/med-z4-integration-quickstart.md` - 30-minute integration guide
+- `docs/reference/timezone-and-session-management.md` - Session handling patterns
+
+---
+
+This completes Phase F! You now have full bidirectional CCOW integration with med-z4 using the simplified v2.1 API (no join/leave protocol, no local database table).
 
 ---
 

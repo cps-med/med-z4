@@ -3,6 +3,14 @@
 {% block title %}Patient Roster - {{ settings.app.name }}{% endblock %}
 
 {% block content %}
+<!-- CCOW Context Banner (polled every 5 seconds) -->
+<div id="ccow-banner-container"
+     hx-get="/context/banner"
+     hx-trigger="load, refresh, every 5s"
+     hx-swap="innerHTML">
+    {% include "partials/ccow_banner.html" %}
+</div>
+
 <div class="dashboard-header">
     <h2>Patient Roster</h2>
     <div class="header-actions">

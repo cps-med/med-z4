@@ -1,13 +1,12 @@
 # -----------------------------------------------------------
 # app/services/ccow_service.py
 # -----------------------------------------------------------
-# CCOW Vault API integration service
+# CCOW Vault v2.1 API integration service
 # -----------------------------------------------------------
 
 import httpx
 import logging
 from typing import Optional, Dict, Any
-from datetime import datetime
 
 from config import settings
 
@@ -15,121 +14,138 @@ logger = logging.getLogger(__name__)
 
 
 class CCOWService:
-    """Service for CCOW Vault API interactions."""
+    """
+    Service for CCOW Vault v2.1 API interactions.
+
+    Uses X-Session-ID header for authentication (cross-application pattern).
+    CCOW Vault validates the session against the shared auth.sessions table
+    and extracts user_id to provide per-user context isolation.
+    """
 
     def __init__(self):
         self.base_url = settings.ccow.base_url
         self.timeout = 5.0  # 5 second timeout for CCOW calls
 
-    async def join_context(self, user_id: str, session_id: str) -> Optional[Dict[str, Any]]:
+    async def get_active_patient(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
-        Join CCOW context as a participant.
-        Returns context token and current patient ICN if available.
-        """
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/ccow/join",
-                    json={
-                        "application_id": "med-z4",
-                        "user_id": user_id,
-                        "session_id": session_id,
-                    }
-                )
-                response.raise_for_status()
-                data = response.json()
+        Get the current user's active patient context from CCOW Vault.
 
-                logger.info(f"Joined CCOW context: {data.get('context_token')}")
-                return data
+        Args:
+            session_id: med-z4 session UUID (from med_z4_session_id cookie)
 
-        except httpx.TimeoutException:
-            logger.error("CCOW join timeout")
-            return None
-        except httpx.HTTPStatusError as e:
-            logger.error(f"CCOW join failed: {e.response.status_code}")
-            return None
-        except Exception as e:
-            logger.error(f"CCOW join error: {e}")
-            return None
-
-    async def poll_context(self, context_token: str) -> Optional[Dict[str, Any]]:
-        """
-        Poll CCOW for current context.
-        Returns current patient ICN and context status.
+        Returns:
+            Patient context dict with patient_id, set_by, set_at, etc.
+            None if no active patient or on error.
         """
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.get(
-                    f"{self.base_url}/ccow/context",
-                    params={"context_token": context_token}
+                    f"{self.base_url}/ccow/active-patient",
+                    headers={"X-Session-ID": session_id}
                 )
+
+                if response.status_code == 404:
+                    # No active patient for this user
+                    return None
+
                 response.raise_for_status()
                 data = response.json()
 
-                logger.debug(f"CCOW context poll: {data.get('patient_icn')}")
+                logger.debug(f"CCOW get_active_patient: {data.get('patient_id')}")
                 return data
 
         except httpx.TimeoutException:
-            logger.warning("CCOW poll timeout")
+            logger.warning("CCOW get_active_patient timeout")
             return None
         except httpx.HTTPStatusError as e:
-            logger.warning(f"CCOW poll failed: {e.response.status_code}")
+            logger.warning(f"CCOW get_active_patient failed: {e.response.status_code}")
             return None
         except Exception as e:
-            logger.error(f"CCOW poll error: {e}")
+            logger.error(f"CCOW get_active_patient error: {e}")
             return None
 
-    async def leave_context(self, context_token: str) -> bool:
+    async def set_active_patient(self, session_id: str, patient_icn: str) -> bool:
         """
-        Leave CCOW context (on logout).
+        Set the current user's active patient context in CCOW Vault.
+
+        Args:
+            session_id: med-z4 session UUID
+            patient_icn: Patient ICN to set as active
+
+        Returns:
+            True if successful, False otherwise
         """
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/ccow/leave",
-                    json={"context_token": context_token}
-                )
-                response.raise_for_status()
-
-                logger.info(f"Left CCOW context: {context_token}")
-                return True
-
-        except Exception as e:
-            logger.error(f"CCOW leave error: {e}")
-            return False
-
-    async def set_context(self, context_token: str, patient_icn: str) -> bool:
-        """
-        Set patient context (optional - for future use if med-z4 becomes a manager).
-        """
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/ccow/context",
+                response = await client.put(
+                    f"{self.base_url}/ccow/active-patient",
+                    headers={"X-Session-ID": session_id},
                     json={
-                        "context_token": context_token,
-                        "patient_icn": patient_icn
+                        "patient_id": patient_icn,
+                        "set_by": "med-z4"
                     }
                 )
                 response.raise_for_status()
 
-                logger.info(f"Set CCOW context: {patient_icn}")
+                logger.info(f"CCOW set_active_patient: {patient_icn}")
+                return True
+
+        except httpx.TimeoutException:
+            logger.error("CCOW set_active_patient timeout")
+            return False
+        except httpx.HTTPStatusError as e:
+            logger.error(f"CCOW set_active_patient failed: {e.response.status_code}")
+            return False
+        except Exception as e:
+            logger.error(f"CCOW set_active_patient error: {e}")
+            return False
+
+    async def clear_active_patient(self, session_id: str) -> bool:
+        """
+        Clear the current user's active patient context in CCOW Vault.
+
+        Args:
+            session_id: med-z4 session UUID
+
+        Returns:
+            True if successful or no context to clear, False on error
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.delete(
+                    f"{self.base_url}/ccow/active-patient",
+                    headers={"X-Session-ID": session_id}
+                )
+
+                if response.status_code in (204, 404):
+                    # 204 = cleared, 404 = nothing to clear
+                    logger.info("CCOW clear_active_patient: success")
+                    return True
+
+                response.raise_for_status()
                 return True
 
         except Exception as e:
-            logger.error(f"CCOW set context error: {e}")
+            logger.error(f"CCOW clear_active_patient error: {e}")
             return False
 
-    async def health_check(self) -> bool:
-        """Check if CCOW Vault is available."""
+    async def health_check(self) -> Dict[str, Any]:
+        """
+        Check if CCOW Vault is available and get version info.
+
+        Returns:
+            Health check response dict or error dict
+        """
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.get(
                     f"{self.base_url}{settings.ccow.health_endpoint}"
                 )
-                return response.status_code == 200
-        except Exception:
-            return False
+                if response.status_code == 200:
+                    return response.json()
+                return {"status": "unhealthy", "error": f"HTTP {response.status_code}"}
+        except Exception as e:
+            return {"status": "unreachable", "error": str(e)}
 
 
 # Singleton instance

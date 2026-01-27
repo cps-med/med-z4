@@ -397,3 +397,69 @@ label {
     color: var(--color-text-muted);
     font-size: 0.875rem;
 }
+
+/* =====================================================
+   CCOW Context Banner
+   ===================================================== */
+   
+.ccow-banner {
+    padding: 12px 16px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+}
+
+.ccow-banner.active {
+    background-color: var(--color-primary-light);
+    border: 1px solid var(--color-primary);
+}
+
+.ccow-banner.inactive {
+    background-color: var(--color-gray-100);
+    border: 1px solid var(--color-gray-300);
+}
+
+.ccow-banner .banner-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.ccow-banner .banner-content.empty {
+    color: var(--color-gray-600);
+}
+
+.ccow-banner .banner-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-primary-dark);
+}
+
+.ccow-banner.inactive .banner-label {
+    color: var(--color-gray-500);
+}
+
+.ccow-banner .banner-icn {
+    font-family: monospace;
+    font-size: 0.875rem;
+    color: var(--color-gray-600);
+}
+
+.ccow-banner .banner-source {
+    font-size: 0.75rem;
+    color: var(--color-gray-500);
+    margin-left: auto;
+    margin-right: 8px;
+}
+
+.ccow-banner .btn {
+    margin-left: auto;
+}
+
+.ccow-banner .banner-source + .btn {
+    margin-left: 0;
+}
