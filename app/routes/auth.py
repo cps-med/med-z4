@@ -70,11 +70,12 @@ async def login(
 
 @router.post("/logout")
 async def logout(request: Request, db: AsyncSession = Depends(get_db)):
-    """Invalidate session and redirect to login."""
+    """Invalidate session and redirect to login. CCOW context preserved."""
 
     session_id = request.cookies.get(settings.session.cookie_name)
 
     if session_id:
+        # Invalidate session in database
         await invalidate_session(db, session_id)
 
     response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)

@@ -44,8 +44,9 @@ app = FastAPI(title=settings.app.name, debug=settings.app.debug)
 # Mount the static files directory
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
-# Setup Jinja2 templates directory
+# Setup Jinja2 templates directory with auto-reload for development
 templates = Jinja2Templates(directory="app/templates")
+templates.env.auto_reload = True
 
 # Register all routers
 app.include_router(auth.router)

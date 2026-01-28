@@ -1647,6 +1647,15 @@ Create new `app/static/css/style.css` (or update existing `app/static/style.css`
     --color-warning: #f59e0b;          /* Amber 500 */
     --color-error: #ef4444;            /* Red 500 */
 
+    /* Gray Palette (for CCOW banner and UI elements) */
+    --color-gray-100: #f3f4f6;         /* Gray 100 - Light backgrounds */
+    --color-gray-300: #d1d5db;         /* Gray 300 - Borders */
+    --color-gray-500: #6b7280;         /* Gray 500 - Secondary text */
+    --color-gray-600: #4b5563;         /* Gray 600 - Muted text */
+
+    /* Extended Primary Colors (for CCOW integration) */
+    --color-primary-dark: #115e59;     /* Teal 800 - Dark text on light backgrounds */
+
     /* Spacing & Layout */
     --spacing-xs: 0.25rem;
     --spacing-sm: 0.5rem;
@@ -1767,6 +1776,18 @@ button:disabled,
 .btn:disabled {
     background-color: var(--color-text-muted);
     cursor: not-allowed;
+}
+
+/* Button Variants */
+.btn-outline {
+    background-color: transparent;
+    color: var(--color-primary);
+    border: 2px solid var(--color-primary);
+}
+
+.btn-outline:hover {
+    background-color: var(--color-primary);
+    color: var(--color-text-inverse);
 }
 
 /* =====================================================
@@ -4266,7 +4287,14 @@ This is the **complete updated `dashboard.html`** with all CCOW integration from
 
 ### 10.2.7 Complete CSS: CCOW Styles for style.css
 
-Add these styles to `app/static/css/style.css` for CCOW integration:
+Add these styles to `app/static/css/style.css` for CCOW integration.
+
+**Prerequisites:** Ensure the following CSS variables are defined in your `:root` section (see Phase A, Section 10.0.2):
+- `--color-gray-100`, `--color-gray-300`, `--color-gray-500`, `--color-gray-600` (gray palette)
+- `--color-primary-dark` (dark teal variant)
+- `.btn-outline` button variant
+
+These variables were added to Phase A in Section 10.0.2 to support CCOW banner styling.
 
 ```css
 /* ========== CCOW Integration Styles (Phase F) ========== */
