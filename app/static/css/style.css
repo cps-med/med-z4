@@ -38,7 +38,6 @@
     /* Extended Primary Colors (for CCOW integration) */
     --color-primary-dark: #115e59;     /* Teal 800 - Dark text on light backgrounds */
 
-
     /* Spacing & layout */
     --spacing-xs: 0.25rem;
     --spacing-sm: 0.5rem;
@@ -57,6 +56,44 @@
     --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.5);
     --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
     --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+
+    /* Primary colors - Teal/Emerald */
+    --color-primary: #0d9488;          /* Teal 600 - primary actions */
+    --color-primary-hover: #0f766e;    /* Teal 700 - hover states */
+    --color-primary-light: #5eead4;    /* Teal 300 - accents */
+
+    /* ADD THESE ALIASES FOR TASK G5 COMPATIBILITY */
+    --primary-teal: #0d9488;           /* Alias for --color-primary */
+    --primary-600: #0f766e;            /* Teal 600 */
+    --primary-700: #0d9488;            /* Teal 700 */
+
+    /* ADD SPACING ALIASES */
+    --space-1: 0.25rem;                /* 4px */
+    --space-2: 0.5rem;                 /* 8px */
+    --space-3: 0.75rem;                /* 12px */
+    --space-4: 1rem;                   /* 16px */
+    --space-5: 1.25rem;                /* 20px */
+    --space-6: 1.5rem;                 /* 24px */
+    --space-8: 2rem;                   /* 32px */
+    --space-12: 3rem;                  /* 48px */
+
+    /* ADD TEXT SIZE ALIASES */
+    --text-xs: 0.75rem;                /* 12px */
+    --text-sm: 0.875rem;               /* 14px */
+    --text-base: 1rem;                 /* 16px */
+    --text-lg: 1.125rem;               /* 18px */
+    --text-xl: 1.25rem;                /* 20px */
+    --text-2xl: 1.5rem;                /* 24px */
+    --text-3xl: 1.875rem;              /* 30px */
+
+    /* ADD GRAY SCALE ALIASES */
+    --gray-50: #f9fafb;
+    --gray-100: #f3f4f6;
+    --gray-200: #e5e7eb;
+    --gray-400: #9ca3af;
+    --gray-600: #4b5563;
+    --gray-700: #374151;
+    --gray-900: #111827;
 }
 
 /* ==========================================================
@@ -543,4 +580,229 @@ label {
 .notification button {
     flex-shrink: 0;
     margin: 0;
+}
+
+/* =====================================================
+   Patient Detail Page
+   ===================================================== */
+
+.patient-detail-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: var(--space-6);
+}
+
+/* Add spacing between clinical data sections */
+.patient-detail-container .card {
+    margin-bottom: var(--space-4);
+}
+
+/* First card (patient header) already has its own margin */
+.patient-detail-container .patient-header-card {
+    margin-bottom: var(--space-6);
+}
+
+/* Back Navigation */
+.back-nav {
+    margin-bottom: var(--space-4);
+}
+
+.back-link {
+    display: inline-flex;
+    align-items: center;
+    color: var(--primary-teal);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: var(--text-base);
+    transition: color 0.2s ease;
+}
+
+.back-link:hover {
+    color: var(--primary-700);
+    text-decoration: underline;
+}
+
+/* Patient Header Card */
+.patient-header-card {
+    margin-bottom: var(--space-6);
+    background: linear-gradient(135deg, var(--primary-teal) 0%, var(--primary-600) 100%);
+    color: white;
+}
+
+.patient-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-1) var(--space-6);
+}
+
+.patient-header-left {
+    flex: 1;
+}
+
+.patient-name-large {
+    font-size: var(--text-3xl);
+    font-weight: bold;
+    margin: 0 0 var(--space-2) 0;
+    color: white;
+}
+
+.patient-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+}
+
+.meta-item {
+    font-size: var(--text-sm);
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.meta-item strong {
+    font-weight: 600;
+    margin-right: var(--space-1);
+}
+
+/* Collapsible Sections */
+.collapsible-section {
+    margin: 0;
+}
+
+.collapsible-section summary {
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+
+.collapsible-section summary::-webkit-details-marker {
+    display: none;
+}
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-3) var(--space-6);
+    border-bottom: 2px solid var(--gray-200);
+    background-color: var(--gray-50);
+    transition: background-color 0.2s ease;
+}
+
+.section-header:hover {
+    background-color: var(--gray-100);
+}
+
+.section-title {
+    font-size: var(--text-lg);
+    font-weight: bold;
+    color: var(--gray-900);
+    margin: 0;
+}
+
+.section-title::before {
+    content: '▶ ';
+    display: inline-block;
+    transition: transform 0.2s ease;
+    margin-right: var(--space-2);
+    color: var(--primary-teal);
+}
+
+.collapsible-section[open] .section-title::before {
+    transform: rotate(90deg);
+}
+
+.section-content {
+    padding: var(--space-6);
+}
+
+/* Data Tables in Clinical Sections */
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: var(--space-2);
+}
+
+.data-table thead {
+    background-color: var(--primary-teal);
+    color: white;
+}
+
+.data-table th {
+    padding: var(--space-3) var(--space-4);
+    text-align: left;
+    font-weight: 600;
+    font-size: var(--text-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.data-table tbody tr {
+    border-bottom: 1px solid var(--gray-200);
+    transition: background-color 0.2s ease;
+}
+
+.data-table tbody tr:nth-child(even) {
+    background-color: var(--gray-50);
+}
+
+.data-table tbody tr:hover {
+    background-color: #ccfbf1;
+}
+
+.data-table td {
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-sm);
+    color: var(--gray-700);
+}
+
+.add-btn {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Empty State */
+.empty-state {
+    text-align: center;
+    padding: var(--space-8) var(--space-4);
+}
+
+.empty-message {
+    font-size: var(--text-base);
+    color: var(--gray-600);
+    font-style: italic;
+}
+
+/* Data Table Enhancements */
+.sig-cell {
+    max-width: 300px;
+    white-space: normal;
+    line-height: 1.4;
+}
+
+/* Badge Variants */
+.badge-success {
+    background-color: #d1fae5;
+    color: #065f46;
+}
+
+.badge-danger {
+    background-color: #fee2e2;
+    color: #991b1b;
+}
+
+.badge-warning {
+    background-color: #fef3c7;
+    color: #92400e;
+}
+
+.badge-info {
+    background-color: #dbeafe;
+    color: #1e40af;
+}
+
+/* Navigation User Display */
+.nav-user {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
 }

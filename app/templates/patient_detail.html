@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Patient Detail - {{ settings.app.name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}">
+    <link rel="icon" href="/static/image/favicon-emoji.ico">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+    <!-- Navigation Header -->
+    <nav class="main-nav">
+        <h1>{{ settings.app.name }}</h1>
+        {% if user %}
+        <div class="nav-user">
+            <span class="user-display">
+                {{ user.display_name }} &nbsp; | &nbsp; {{ user.email }}
+            </span>
+            <form action="/logout" method="POST" style="display: inline;">
+                <button type="submit" class="btn btn-ghost btn-sm">Logout</button>
+            </form>
+        </div>
+        {% endif %}
+    </nav>
+
+    <div class="container patient-detail-container">
+        <!-- Back Navigation -->
+        <div class="back-nav">
+            <a href="/dashboard" class="back-link">← Back to Roster</a>
+        </div>
+
+        <!-- Patient Header Card -->
+        <div class="card patient-header-card">
+            <div class="patient-header">
+                <div class="patient-header-left">
+                    <h1 class="patient-name-large">{{ patient.name_display }}</h1>
+                    <div class="patient-meta">
+                        <span class="meta-item"><strong>ICN:</strong> {{ patient.icn }}</span>
+                        <span class="meta-item"><strong>DOB:</strong> {{ patient.dob }} ({{ patient.age }} years)</span>
+                        <span class="meta-item"><strong>Sex:</strong> {{ patient.sex }}</span>
+                        <span class="meta-item"><strong>SSN:</strong> ***-**-{{ patient.ssn_last4 }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Vitals Section -->
+        <div class="card">
+            <details class="collapsible-section" open>
+                <summary class="section-header">
+                    <h2 class="section-title">Vital Signs ({{ vitals|length }})</h2>
+                    <button class="btn btn-sm btn-outline add-btn" disabled>+ Add Vital</button>
+                </summary>
+                <div class="section-content">
+                    {% if vitals %}
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Date/Time</th>
+                                <th>Type</th>
+                                <th>Value</th>
+                                <th>Unit</th>
+                                <th>Location</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for vital in vitals %}
+                            <tr>
+                                <td>{{ vital.taken_datetime }}</td>
+                                <td>{{ vital.vital_type }}</td>
+                                <td>{{ vital.result_value }}</td>
+                                <td>{{ vital.unit_of_measure }}</td>
+                                <td>{{ vital.location_name }}</td>
+                                <td>
+                                    {% if vital.abnormal_flag in ['CRITICAL', 'HIGH'] %}
+                                    <span class="badge badge-warning">{{ vital.abnormal_flag }}</span>
+                                    {% elif vital.abnormal_flag == 'LOW' %}
+                                    <span class="badge badge-info">{{ vital.abnormal_flag }}</span>
+                                    {% else %}
+                                    <span class="badge badge-neutral">{{ vital.abnormal_flag }}</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <div class="empty-state">
+                        <p class="empty-message">No vital signs recorded</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </details>
+        </div>
+
+        <!-- Allergies Section -->
+        <div class="card">
+            <details class="collapsible-section" open>
+                <summary class="section-header">
+                    <h2 class="section-title">Allergies ({{ allergies|length }})</h2>
+                    <button class="btn btn-sm btn-outline add-btn" disabled>+ Add Allergy</button>
+                </summary>
+                <div class="section-content">
+                    {% if allergies %}
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Allergen</th>
+                                <th>Type</th>
+                                <th>Severity</th>
+                                <th>Reactions</th>
+                                <th>Documented</th>
+                                <th>Category</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for allergy in allergies %}
+                            <tr>
+                                <td><strong>{{ allergy.allergen }}</strong></td>
+                                <td>{{ allergy.type }}</td>
+                                <td>
+                                    {% if allergy.severity == 'SEVERE' %}
+                                    <span class="badge badge-danger">{{ allergy.severity }}</span>
+                                    {% elif allergy.severity == 'MODERATE' %}
+                                    <span class="badge badge-warning">{{ allergy.severity }}</span>
+                                    {% else %}
+                                    <span class="badge badge-info">{{ allergy.severity }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ allergy.reactions }}</td>
+                                <td>{{ allergy.origination_date }}</td>
+                                <td>{{ allergy.historical_or_observed }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <div class="empty-state">
+                        <p class="empty-message">No known allergies</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </details>
+        </div>
+
+        <!-- Medications Section -->
+        <div class="card">
+            <details class="collapsible-section" open>
+                <summary class="section-header">
+                    <h2 class="section-title">Medications ({{ medications|length }})</h2>
+                    <button class="btn btn-sm btn-outline add-btn" disabled>+ Add Medication</button>
+                </summary>
+                <div class="section-content">
+                    {% if medications %}
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Medication</th>
+                                <th>Strength</th>
+                                <th>Directions</th>
+                                <th>Status</th>
+                                <th>Issue Date</th>
+                                <th>Expires</th>
+                                <th>Refills</th>
+                                <th>Provider</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for med in medications %}
+                            <tr>
+                                <td><strong>{{ med.drug_name }}</strong></td>
+                                <td>{{ med.strength }}</td>
+                                <td class="sig-cell">{{ med.sig }}</td>
+                                <td>
+                                    {% if med.status == 'ACTIVE' %}
+                                    <span class="badge badge-success">{{ med.status }}</span>
+                                    {% elif med.status == 'EXPIRED' %}
+                                    <span class="badge badge-neutral">{{ med.status }}</span>
+                                    {% else %}
+                                    <span class="badge badge-warning">{{ med.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ med.issue_date }}</td>
+                                <td>{{ med.expiration_date }}</td>
+                                <td>{{ med.refills_remaining }}</td>
+                                <td>{{ med.provider }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <div class="empty-state">
+                        <p class="empty-message">No active medications</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </details>
+        </div>
+    </div>
+</body>
+</html>

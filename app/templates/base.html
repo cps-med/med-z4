@@ -14,9 +14,14 @@
     <nav class="main-nav">
         <h1>{{ settings.app.name }}</h1>
         {% if user %}
-        <span class="user-display">
-            {{ user.display_name }} &nbsp; | &nbsp; {{ user.email }}
-        </span>
+        <div class="nav-user">
+            <span class="user-display">
+                {{ user.display_name }} &nbsp; | &nbsp; {{ user.email }}
+            </span>
+            <form action="/logout" method="POST" style="display: inline;">
+                <button type="submit" class="btn btn-ghost btn-sm">Logout</button>
+            </form>
+        </div>
         {% endif %}
     </nav>
 

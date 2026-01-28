@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 # Routes
-from app.routes import auth, admin, health, dashboard
+from app.routes import auth, admin, health, dashboard, patient
 
 # Import 'settings' object from root-level config file
 from config import settings
@@ -49,10 +49,11 @@ templates = Jinja2Templates(directory="app/templates")
 templates.env.auto_reload = True
 
 # Register all routers
-app.include_router(auth.router)
-app.include_router(dashboard.router)
-app.include_router(admin.router)
-app.include_router(health.router)
+app.include_router(auth.router, tags=["auth"])
+app.include_router(dashboard.router, tags=["dashboard"])
+app.include_router(admin.router, tags=["admin"])
+app.include_router(health.router, tags=["health"])
+app.include_router(patient.router, tags=["patient"])
 
 
 # Create root route handler

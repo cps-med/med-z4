@@ -3342,12 +3342,19 @@ Update `app/templates/base.html` to show the logged-in user in the navigation ba
 <nav class="main-nav">
     <h1>{{ settings.app.name }}</h1>
     {% if user %}
-    <span class="user-display">
-        {{ user.display_name or user.email }}
-    </span>
+    <div class="nav-user">
+        <span class="user-display">
+            {{ user.display_name }} &nbsp; | &nbsp; {{ user.email }}
+        </span>
+        <form action="/logout" method="POST" style="display: inline;">
+            <button type="submit" class="btn btn-ghost btn-sm">Logout</button>
+        </form>
+    </div>
     {% endif %}
 </nav>
 ```
+
+**Note:** This navigation pattern with the logout button is the **standard for all pages**. Update `base.html` to include this pattern so all pages that extend it (like dashboard) inherit the consistent navigation header.
 
 Update `app/static/style.css` to style the navigation with flexbox layout:
 
@@ -3368,6 +3375,12 @@ Update `app/static/style.css` to style the navigation with flexbox layout:
 
 .main-nav h1 {
     margin: 0;
+}
+
+.nav-user {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
 }
 
 .user-display {
@@ -4802,6 +4815,1244 @@ curl http://localhost:8001/ccow/health | grep version
 ---
 
 This completes Phase F! You now have full bidirectional CCOW integration with med-z4 using the simplified v2.1 API (no join/leave protocol, no local database table).
+
+---
+
+## 10.3 Phase G: Patient Detail Page
+
+**Goal:** Create a patient detail page that displays clinical data (vitals, allergies, medications) with automatic CCOW context synchronization.
+
+**Prerequisites:** Phase F completed, CCOW integration working
+
+**What You'll Build:**
+- Patient service layer for fetching clinical data
+- Patient detail route (`/patient/{icn}`) with automatic CCOW context setting
+- Patient detail template with collapsible sections (HTML `<details>` elements)
+- Navigation from dashboard roster to patient detail page
+- Placeholder "+ Add" buttons for future CRUD operations (Phase H)
+
+---
+
+### 10.3.1 Phase G Overview
+
+**Current State (After Phase F):**
+- Dashboard displays patient roster
+- "View" button sets CCOW context and shows alert
+- No detailed patient view
+
+**Target State (After Phase G):**
+- Clicking "View" navigates to patient detail page
+- Detail page displays patient demographics, vitals, allergies, and medications
+- Automatic CCOW context synchronization on page load
+- Collapsible data sections using HTML `<details>` element
+- "← Back to Roster" navigation link
+- Placeholder "+ Add" buttons (non-functional) for Phase H
+
+**Migration Strategy:**
+- Create new patient service layer (`patient_service.py`)
+- Add new patient detail route (`/patient/{icn}`)
+- Create new template (`patient_detail.html`)
+- Update dashboard "View" button to navigate instead of showing alert
+- Minimal CSS additions for patient detail layout
+
+---
+
+### 10.3.2 Task G1: Create Patient Service Layer
+
+**Understanding the Service Layer Pattern:**
+
+In a FastAPI + HTMX + Jinja2 application, code is organized into distinct layers with specific responsibilities:
+- **Routes** (`app/routes/*.py`) - Handle HTTP requests, validate sessions, call services, return templates/JSON
+- **Services** (`app/services/*.py`) - Contain business logic and data access (database queries, external APIs)
+- **Models** (`app/models/*.py`) - Define SQLAlchemy database table schemas
+- **Templates** (`app/templates/*.html`) - Jinja2 HTML templates for rendering UI
+
+The **service layer** isolates business logic and database operations from route handlers. This separation provides:
+- **Testability** - Services can be unit tested independently of HTTP request handling
+- **Reusability** - Multiple routes can call the same service function
+- **Maintainability** - Database query changes don't require route handler modifications
+- **Single Responsibility** - Routes focus on HTTP concerns; services focus on business logic
+
+For example: A route validates the session and calls `get_patient_vitals(db, patient_key)`, which returns structured data. The route then passes this data to a Jinja2 template for HTML rendering. The route never writes SQL queries directly.
+
+---
+
+Create `app/services/patient_service.py` with functions to fetch patient clinical data:
+
+```python
+# app/services/patient_service.py
+# Patient data service functions
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
+from typing import Optional, Dict, Any, List
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+async def get_patient_demographics(db: AsyncSession, icn: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch patient demographics by ICN.
+    Returns patient info dict or None if not found.
+    """
+    query = text("""
+        SELECT
+            patient_key,
+            icn,
+            name_display,
+            name_first,
+            name_last,
+            dob,
+            age,
+            sex,
+            ssn_last4
+        FROM clinical.patient_demographics
+        WHERE icn = :icn
+    """)
+
+    result = await db.execute(query, {"icn": icn})
+    row = result.fetchone()
+
+    if not row:
+        logger.warning(f"Patient not found: {icn}")
+        return None
+
+    return {
+        "patient_key": row[0],
+        "icn": row[1],
+        "name_display": row[2],
+        "name_first": row[3],
+        "name_last": row[4],
+        "dob": row[5].strftime("%Y-%m-%d") if row[5] else "N/A",
+        "age": row[6] if row[6] else "N/A",
+        "sex": row[7] if row[7] else "Unknown",
+        "ssn_last4": row[8] if row[8] else "N/A",
+    }
+
+
+async def get_patient_vitals(db: AsyncSession, patient_key: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """
+    Fetch recent vitals for a patient.
+    Returns list of vital sign dictionaries.
+    """
+    query = text("""
+        SELECT
+            vital_type,
+            vital_abbr,
+            taken_datetime,
+            result_value,
+            numeric_value,
+            systolic,
+            diastolic,
+            unit_of_measure,
+            location_name,
+            abnormal_flag
+        FROM clinical.patient_vitals
+        WHERE patient_key = :patient_key
+        ORDER BY taken_datetime DESC
+        LIMIT :limit
+    """)
+
+    result = await db.execute(query, {"patient_key": patient_key, "limit": limit})
+
+    vitals = []
+    for row in result.fetchall():
+        vitals.append({
+            "vital_type": row[0],
+            "vital_abbr": row[1],
+            "taken_datetime": row[2].strftime("%Y-%m-%d %H:%M") if row[2] else "N/A",
+            "result_value": row[3] if row[3] else "N/A",
+            "numeric_value": float(row[4]) if row[4] else None,
+            "systolic": row[5],
+            "diastolic": row[6],
+            "unit_of_measure": row[7] if row[7] else "",
+            "location_name": row[8] if row[8] else "N/A",
+            "abnormal_flag": row[9] if row[9] else "NORMAL",
+        })
+
+    return vitals
+
+
+async def get_patient_allergies(db: AsyncSession, patient_key: str) -> List[Dict[str, Any]]:
+    """
+    Fetch active allergies for a patient.
+    Returns list of allergy dictionaries.
+    """
+    query = text("""
+        SELECT
+            allergen_standardized,
+            allergen_type,
+            severity,
+            reactions,
+            origination_date,
+            historical_or_observed
+        FROM clinical.patient_allergies
+        WHERE patient_key = :patient_key
+          AND is_active = TRUE
+        ORDER BY severity_rank DESC, origination_date DESC
+    """)
+
+    result = await db.execute(query, {"patient_key": patient_key})
+
+    allergies = []
+    for row in result.fetchall():
+        allergies.append({
+            "allergen": row[0],
+            "type": row[1] if row[1] else "N/A",
+            "severity": row[2] if row[2] else "Unknown",
+            "reactions": row[3] if row[3] else "N/A",
+            "origination_date": row[4].strftime("%Y-%m-%d") if row[4] else "N/A",
+            "historical_or_observed": row[5] if row[5] else "N/A",
+        })
+
+    return allergies
+
+
+async def get_patient_medications(db: AsyncSession, patient_key: str, limit: int = 20) -> List[Dict[str, Any]]:
+    """
+    Fetch active outpatient medications for a patient.
+    Returns list of medication dictionaries.
+    """
+    query = text("""
+        SELECT
+            drug_name_local,
+            generic_name,
+            drug_strength,
+            sig,
+            rx_status_computed,
+            issue_date,
+            expiration_date,
+            refills_remaining,
+            provider_name
+        FROM clinical.patient_medications_outpatient
+        WHERE patient_key = :patient_key
+          AND is_active = TRUE
+        ORDER BY issue_date DESC
+        LIMIT :limit
+    """)
+
+    result = await db.execute(query, {"patient_key": patient_key, "limit": limit})
+
+    medications = []
+    for row in result.fetchall():
+        medications.append({
+            "drug_name": row[0] if row[0] else "N/A",
+            "generic_name": row[1] if row[1] else "N/A",
+            "strength": row[2] if row[2] else "N/A",
+            "sig": row[3] if row[3] else "N/A",
+            "status": row[4] if row[4] else "N/A",
+            "issue_date": row[5].strftime("%Y-%m-%d") if row[5] else "N/A",
+            "expiration_date": row[6].strftime("%Y-%m-%d") if row[6] else "N/A",
+            "refills_remaining": row[7] if row[7] is not None else "N/A",
+            "provider": row[8] if row[8] else "N/A",
+        })
+
+    return medications
+```
+
+**Verification:**
+- File created at `app/services/patient_service.py`
+- No syntax errors: `python -c "from app.services.patient_service import get_patient_demographics; print('Patient service imported successfully')"`
+
+---
+
+### 10.3.3 Task G2: Create Patient Detail Route
+
+**Understanding the Routes Layer:**
+
+Routes (`app/routes/*.py`) are the **entry points** for HTTP requests in a FastAPI application. They act as coordinators between the web framework and your business logic, with specific responsibilities:
+
+**Primary Responsibilities:**
+- **Request Handling** - Parse incoming HTTP requests (path params, query params, form data, cookies)
+- **Authentication** - Validate sessions and enforce access control (via `Depends(get_db)` and session validation)
+- **Service Orchestration** - Call one or more service functions to fetch/manipulate data
+- **Response Generation** - Return appropriate responses (HTML templates, JSON, redirects, errors)
+- **HTTP Concerns** - Set cookies, status codes, headers, handle redirects
+
+**Routes Should Be Thin:**
+A well-designed route handler should read like a recipe:
+1. Validate the user's session
+2. Call service(s) to get data
+3. Pass data to template
+4. Return response
+
+Routes should **not** contain:
+- Direct SQL queries (delegate to services)
+- Complex business logic (delegate to services)
+- Data transformation (delegate to services)
+
+**Example Flow for `/patient/{icn}` Route:**
+```
+1. User requests /patient/ICN100001
+2. Route extracts ICN from URL path
+3. Route validates session cookie → get user_info
+4. Route calls get_patient_demographics(db, icn) → get patient data
+5. Route calls get_patient_vitals(db, patient_key) → get vitals
+6. Route calls set_active_patient(session_id, icn) → set CCOW context
+7. Route passes all data to patient_detail.html template
+8. Route returns rendered HTML response
+```
+
+**FastAPI Features Used in Routes:**
+- `@router.get("/path")` - Decorator defines HTTP method and URL pattern
+- `Depends(get_db)` - Dependency injection for database session
+- `Cookie(...)` - Extract cookie values from request
+- `templates.TemplateResponse()` - Render Jinja2 template with data
+- `RedirectResponse()` - Redirect to another URL (e.g., login page)
+
+---
+
+Create `app/routes/patient.py` for the patient detail route:
+
+```python
+# app/routes/patient.py
+from fastapi import APIRouter, Request, Cookie, Depends
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Optional
+import logging
+
+from database import get_db
+from app.services.auth_service import validate_session
+from app.services.ccow_service import ccow_service
+from app.services.patient_service import (
+    get_patient_demographics,
+    get_patient_vitals,
+    get_patient_allergies,
+    get_patient_medications
+)
+from config import settings
+
+router = APIRouter()
+templates = Jinja2Templates(directory="app/templates")
+logger = logging.getLogger(__name__)
+
+
+@router.get("/patient/{icn}", response_class=HTMLResponse)
+async def patient_detail(
+    icn: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    session_id: Optional[str] = Cookie(None, alias=settings.session.cookie_name)
+):
+    """
+    Display patient detail page with clinical data.
+    Automatically sets CCOW context to this patient.
+    """
+
+    # Validate session
+    user_info = await validate_session(db, session_id) if session_id else None
+
+    if not user_info:
+        return RedirectResponse(url="/login", status_code=303)
+
+    # Fetch patient demographics
+    patient = await get_patient_demographics(db, icn)
+
+    if not patient:
+        # Patient not found - redirect to dashboard
+        logger.warning(f"Patient not found: {icn}")
+        return RedirectResponse(url="/dashboard", status_code=303)
+
+    # Automatically set CCOW context to this patient
+    await ccow_service.set_active_patient(session_id, icn)
+
+    # Fetch clinical data
+    vitals = await get_patient_vitals(db, patient["patient_key"])
+    allergies = await get_patient_allergies(db, patient["patient_key"])
+    medications = await get_patient_medications(db, patient["patient_key"])
+
+    return templates.TemplateResponse(
+        "patient_detail.html",
+        {
+            "request": request,
+            "settings": settings,
+            "user": user_info,
+            "patient": patient,
+            "vitals": vitals,
+            "allergies": allergies,
+            "medications": medications,
+        }
+    )
+```
+
+**Register the new router in `app/main.py`:**
+
+```python
+# app/main.py (add import and registration)
+from app.routes import auth, dashboard, admin, health, patient  # Add patient
+
+# ... existing code ...
+
+# Register routers
+app.include_router(auth.router, tags=["auth"])
+app.include_router(dashboard.router, tags=["dashboard"])
+app.include_router(admin.router, tags=["admin"])
+app.include_router(health.router, tags=["health"])
+app.include_router(patient.router, tags=["patient"])  # Add this line
+```
+
+**Note:** The `ccow` router is not imported or registered because CCOW functionality is implemented through the service layer (`app/services/ccow_service.py`) and endpoints in `dashboard.py`. The `app/routes/ccow.py` file exists as a placeholder but is not currently used.
+
+**Verification:**
+- File created at `app/routes/patient.py`
+- Router registered in `app/main.py`
+- Restart server: `uvicorn app.main:app --reload --port 8005`
+- Check routes: `http://localhost:8005/docs` should show `/patient/{icn}` endpoint
+
+---
+
+### 10.3.4 Task G3: Create Patient Detail Template
+
+**Understanding the Templates Layer:**
+
+Templates (`app/templates/*.html`) are **Jinja2 HTML files** that define the presentation layer (UI) of your application. They receive data from routes and render dynamic HTML that gets sent to the browser.
+
+**Primary Responsibilities:**
+- **Presentation Logic** - Display data in a user-friendly format (tables, cards, lists)
+- **Dynamic Content** - Use Jinja2 syntax to insert data, loop over collections, conditional rendering
+- **User Interface** - Define HTML structure, apply CSS classes, integrate JavaScript libraries (HTMX)
+- **Accessibility** - Semantic HTML, proper form labels, ARIA attributes
+- **Separation of Concerns** - Templates should NOT contain business logic or database queries
+
+**Jinja2 Template Syntax:**
+
+Jinja2 uses special delimiters to distinguish template code from HTML:
+
+```jinja2
+{{ variable }}              <!-- Output a variable -->
+{% for item in items %}     <!-- Control structures (loops, conditionals) -->
+{% if condition %}          <!-- Conditional rendering -->
+{{ item.name|upper }}       <!-- Filters (transform data) -->
+{% include 'partial.html' %}  <!-- Include other templates -->
+```
+
+**Common Patterns in Templates:**
+
+1. **Variable Output:**
+   ```html
+   <h1>{{ patient.name_display }}</h1>
+   <p>DOB: {{ patient.dob }}</p>
+   ```
+
+2. **Looping Over Collections:**
+   ```html
+   {% for vital in vitals %}
+   <tr>
+       <td>{{ vital.taken_datetime }}</td>
+       <td>{{ vital.result_value }}</td>
+   </tr>
+   {% endfor %}
+   ```
+
+3. **Conditional Rendering:**
+   ```html
+   {% if allergies %}
+       <table>...</table>
+   {% else %}
+       <p>No known allergies</p>
+   {% endif %}
+   ```
+
+4. **Filters (Data Transformation):**
+   ```html
+   {{ patient.name|upper }}        <!-- JOHN DOE -->
+   {{ vitals|length }}             <!-- 5 -->
+   {{ description|default('N/A') }} <!-- Show N/A if null -->
+   ```
+
+**Data Flow from Route to Template:**
+
+Routes pass data to templates via a **context dictionary**:
+
+```python
+# Route (app/routes/patient.py)
+return templates.TemplateResponse(
+    "patient_detail.html",
+    {
+        "request": request,        # Required by Jinja2
+        "settings": settings,      # App configuration
+        "user": user_info,         # Logged-in user
+        "patient": patient_dict,   # Patient demographics
+        "vitals": vitals_list,     # List of vital signs
+        "allergies": allergies_list,  # List of allergies
+    }
+)
+
+# Template (patient_detail.html)
+<h1>{{ patient.name_display }}</h1>  <!-- Access patient dict -->
+<p>Vitals: {{ vitals|length }}</p>   <!-- Access vitals list -->
+```
+
+**Templates Should Be "Dumb":**
+
+Good templates focus on **presentation**, not logic:
+- ✅ **Good:** `{% for vital in vitals %}`
+- ✅ **Good:** `{% if patient.age > 65 %}`
+- ❌ **Bad:** Database queries in templates
+- ❌ **Bad:** Complex calculations or business rules
+- ❌ **Bad:** Direct API calls
+
+If you need computed data, calculate it in the **service layer** or **route**, then pass it to the template.
+
+**HTMX Integration in Templates:**
+
+HTMX attributes (`hx-*`) can be added directly to HTML elements:
+
+```html
+<!-- HTMX polling for CCOW updates -->
+<div hx-get="/context/banner" hx-trigger="every 5s" hx-swap="outerHTML">
+    <!-- Content refreshes every 5 seconds -->
+</div>
+
+<!-- HTMX form submission -->
+<form hx-post="/patient/create" hx-target="#result">
+    <input type="text" name="name">
+    <button type="submit">Save</button>
+</form>
+```
+
+**HTML `<details>` Element (Used in This Task):**
+
+The `<details>` element creates native browser collapsible sections **without JavaScript**:
+
+```html
+<details open>
+    <summary>Click to collapse/expand</summary>
+    <p>This content can be toggled by clicking the summary.</p>
+</details>
+```
+
+Benefits:
+- No JavaScript required
+- Accessible by default (keyboard navigation)
+- Native browser support (all modern browsers)
+- Clean semantic HTML
+
+**Template Organization:**
+
+```
+app/templates/
+├── base.html              # Base layout (shared header, footer)
+├── login.html             # Login page
+├── dashboard.html         # Patient roster
+├── patient_detail.html    # Patient detail (this task)
+└── partials/              # Reusable fragments
+    ├── ccow_banner.html   # CCOW status banner
+    └── user_card.html     # User info card
+```
+
+Use `{% extends "base.html" %}` for shared layout, or standalone templates for full control.
+
+---
+
+Create `app/templates/patient_detail.html`:
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Patient Detail - {{ settings.app.name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+    <!-- Navigation Header -->
+    <nav class="main-nav">
+        <h1>{{ settings.app.name }}</h1>
+        {% if user %}
+        <div class="nav-user">
+            <span class="user-display">
+                {{ user.display_name }} &nbsp; | &nbsp; {{ user.email }}
+            </span>
+            <form action="/logout" method="POST" style="display: inline;">
+                <button type="submit" class="btn btn-ghost btn-sm">Logout</button>
+            </form>
+        </div>
+        {% endif %}
+    </nav>
+
+    <div class="container patient-detail-container">
+        <!-- Back Navigation -->
+        <div class="back-nav">
+            <a href="/dashboard" class="back-link">← Back to Roster</a>
+        </div>
+
+        <!-- Patient Header Card -->
+        <div class="card patient-header-card">
+            <div class="patient-header">
+                <div class="patient-header-left">
+                    <h1 class="patient-name-large">{{ patient.name_display }}</h1>
+                    <div class="patient-meta">
+                        <span class="meta-item"><strong>ICN:</strong> {{ patient.icn }}</span>
+                        <span class="meta-item"><strong>DOB:</strong> {{ patient.dob }} ({{ patient.age }} years)</span>
+                        <span class="meta-item"><strong>Sex:</strong> {{ patient.sex }}</span>
+                        <span class="meta-item"><strong>SSN:</strong> ***-**-{{ patient.ssn_last4 }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Vitals Section -->
+        <div class="card">
+            <details class="collapsible-section" open>
+                <summary class="section-header">
+                    <h2 class="section-title">Vital Signs ({{ vitals|length }})</h2>
+                    <button class="btn btn-sm btn-outline add-btn" disabled>+ Add Vital</button>
+                </summary>
+                <div class="section-content">
+                    {% if vitals %}
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Date/Time</th>
+                                <th>Type</th>
+                                <th>Value</th>
+                                <th>Unit</th>
+                                <th>Location</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for vital in vitals %}
+                            <tr>
+                                <td>{{ vital.taken_datetime }}</td>
+                                <td>{{ vital.vital_type }}</td>
+                                <td>{{ vital.result_value }}</td>
+                                <td>{{ vital.unit_of_measure }}</td>
+                                <td>{{ vital.location_name }}</td>
+                                <td>
+                                    {% if vital.abnormal_flag in ['CRITICAL', 'HIGH'] %}
+                                    <span class="badge badge-warning">{{ vital.abnormal_flag }}</span>
+                                    {% elif vital.abnormal_flag == 'LOW' %}
+                                    <span class="badge badge-info">{{ vital.abnormal_flag }}</span>
+                                    {% else %}
+                                    <span class="badge badge-neutral">{{ vital.abnormal_flag }}</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <div class="empty-state">
+                        <p class="empty-message">No vital signs recorded</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </details>
+        </div>
+
+        <!-- Allergies Section -->
+        <div class="card">
+            <details class="collapsible-section" open>
+                <summary class="section-header">
+                    <h2 class="section-title">Allergies ({{ allergies|length }})</h2>
+                    <button class="btn btn-sm btn-outline add-btn" disabled>+ Add Allergy</button>
+                </summary>
+                <div class="section-content">
+                    {% if allergies %}
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Allergen</th>
+                                <th>Type</th>
+                                <th>Severity</th>
+                                <th>Reactions</th>
+                                <th>Documented</th>
+                                <th>Category</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for allergy in allergies %}
+                            <tr>
+                                <td><strong>{{ allergy.allergen }}</strong></td>
+                                <td>{{ allergy.type }}</td>
+                                <td>
+                                    {% if allergy.severity == 'SEVERE' %}
+                                    <span class="badge badge-danger">{{ allergy.severity }}</span>
+                                    {% elif allergy.severity == 'MODERATE' %}
+                                    <span class="badge badge-warning">{{ allergy.severity }}</span>
+                                    {% else %}
+                                    <span class="badge badge-info">{{ allergy.severity }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ allergy.reactions }}</td>
+                                <td>{{ allergy.origination_date }}</td>
+                                <td>{{ allergy.historical_or_observed }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <div class="empty-state">
+                        <p class="empty-message">No known allergies</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </details>
+        </div>
+
+        <!-- Medications Section -->
+        <div class="card">
+            <details class="collapsible-section" open>
+                <summary class="section-header">
+                    <h2 class="section-title">Medications ({{ medications|length }})</h2>
+                    <button class="btn btn-sm btn-outline add-btn" disabled>+ Add Medication</button>
+                </summary>
+                <div class="section-content">
+                    {% if medications %}
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Medication</th>
+                                <th>Strength</th>
+                                <th>Directions</th>
+                                <th>Status</th>
+                                <th>Issue Date</th>
+                                <th>Expires</th>
+                                <th>Refills</th>
+                                <th>Provider</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for med in medications %}
+                            <tr>
+                                <td><strong>{{ med.drug_name }}</strong></td>
+                                <td>{{ med.strength }}</td>
+                                <td class="sig-cell">{{ med.sig }}</td>
+                                <td>
+                                    {% if med.status == 'ACTIVE' %}
+                                    <span class="badge badge-success">{{ med.status }}</span>
+                                    {% elif med.status == 'EXPIRED' %}
+                                    <span class="badge badge-neutral">{{ med.status }}</span>
+                                    {% else %}
+                                    <span class="badge badge-warning">{{ med.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ med.issue_date }}</td>
+                                <td>{{ med.expiration_date }}</td>
+                                <td>{{ med.refills_remaining }}</td>
+                                <td>{{ med.provider }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <div class="empty-state">
+                        <p class="empty-message">No active medications</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </details>
+        </div>
+    </div>
+</body>
+</html>
+```
+
+**Verification:**
+- File created at `app/templates/patient_detail.html`
+- Restart server and navigate to a patient: `http://localhost:8005/patient/ICN100001`
+- Should see patient detail page with demographics and clinical data
+
+---
+
+### 10.3.5 Task G4: Update Dashboard to Link to Patient Detail
+
+Update `app/routes/dashboard.py` to change the "View" button behavior:
+
+**Current `/patient/select/{icn}` endpoint (sets context and returns JSON):**
+```python
+# This endpoint will remain for manual context setting, but we'll add navigation
+```
+
+**Add new approach: Make "View" button a link instead of HTMX action**
+
+Update `app/templates/dashboard.html` to change the "View" button from an HTMX action to a regular link:
+
+```html
+<!-- OLD: HTMX action button -->
+<button
+    class="btn btn-sm"
+    hx-post="/patient/select/{{ patient.icn }}"
+    hx-trigger="click"
+    hx-on::after-request="if(event.detail.successful) { alert('Context set to: {{ patient.name_display }}'); }"
+>
+    View
+</button>
+
+<!-- NEW: Link to patient detail page -->
+<a href="/patient/{{ patient.icn }}" class="btn btn-sm">
+    View
+</a>
+```
+
+**Complete updated table row in `dashboard.html`:**
+
+Find the table row in your dashboard.html and update it:
+
+```html
+<tbody>
+    {% for patient in patients %}
+    <tr class="{% if active_context and active_context.patient_id == patient.icn %}active-context{% endif %}">
+        <td>{{ patient.name_display }}</td>
+        <td>{{ patient.icn }}</td>
+        <td>{{ patient.dob }}</td>
+        <td>{{ patient.ssn_last4 }}</td>
+        <td>
+            <div class="actions-cell">
+                <a href="/patient/{{ patient.icn }}" class="btn btn-sm">View</a>
+            </div>
+        </td>
+    </tr>
+    {% endfor %}
+</tbody>
+```
+
+**Verification:**
+- Update `app/templates/dashboard.html` with the new link
+- Restart server and navigate to dashboard
+- Click "View" button - should navigate to patient detail page
+- CCOW context should automatically be set to the selected patient
+
+---
+
+### 10.3.6 Task G5: Add Patient Detail CSS Styles
+
+Add patient detail styles to `app/static/css/style.css`:
+
+```css
+/* ===== PATIENT DETAIL PAGE ===== */
+
+.patient-detail-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: var(--space-6);
+}
+
+/* Back Navigation */
+.back-nav {
+    margin-bottom: var(--space-4);
+}
+
+.back-link {
+    display: inline-flex;
+    align-items: center;
+    color: var(--primary-teal);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: var(--text-base);
+    transition: color 0.2s ease;
+}
+
+.back-link:hover {
+    color: var(--primary-700);
+    text-decoration: underline;
+}
+
+/* Patient Header Card */
+.patient-header-card {
+    margin-bottom: var(--space-6);
+    background: linear-gradient(135deg, var(--primary-teal) 0%, var(--primary-600) 100%);
+    color: white;
+}
+
+.patient-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-6);
+}
+
+.patient-header-left {
+    flex: 1;
+}
+
+.patient-name-large {
+    font-size: var(--text-3xl);
+    font-weight: bold;
+    margin: 0 0 var(--space-3) 0;
+    color: white;
+}
+
+.patient-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+}
+
+.meta-item {
+    font-size: var(--text-sm);
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.meta-item strong {
+    font-weight: 600;
+    margin-right: var(--space-1);
+}
+
+/* Collapsible Sections */
+.collapsible-section {
+    margin: 0;
+}
+
+.collapsible-section summary {
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+
+.collapsible-section summary::-webkit-details-marker {
+    display: none;
+}
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-5) var(--space-6);
+    border-bottom: 2px solid var(--gray-200);
+    background-color: var(--gray-50);
+    transition: background-color 0.2s ease;
+}
+
+.section-header:hover {
+    background-color: var(--gray-100);
+}
+
+.section-title {
+    font-size: var(--text-xl);
+    font-weight: bold;
+    color: var(--gray-900);
+    margin: 0;
+}
+
+.section-title::before {
+    content: '▶ ';
+    display: inline-block;
+    transition: transform 0.2s ease;
+    margin-right: var(--space-2);
+    color: var(--primary-teal);
+}
+
+.collapsible-section[open] .section-title::before {
+    transform: rotate(90deg);
+}
+
+.section-content {
+    padding: var(--space-6);
+}
+
+.add-btn {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Empty State */
+.empty-state {
+    text-align: center;
+    padding: var(--space-8) var(--space-4);
+}
+
+.empty-message {
+    font-size: var(--text-base);
+    color: var(--gray-600);
+    font-style: italic;
+}
+
+/* Data Table Enhancements */
+.sig-cell {
+    max-width: 300px;
+    white-space: normal;
+    line-height: 1.4;
+}
+
+/* Badge Variants */
+.badge-success {
+    background-color: #d1fae5;
+    color: #065f46;
+}
+
+.badge-danger {
+    background-color: #fee2e2;
+    color: #991b1b;
+}
+
+.badge-warning {
+    background-color: #fef3c7;
+    color: #92400e;
+}
+
+.badge-info {
+    background-color: #dbeafe;
+    color: #1e40af;
+}
+
+/* Navigation User Display */
+.nav-user {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+}
+```
+
+**Verification:**
+- Add styles to `app/static/css/style.css`
+- Refresh patient detail page
+- Sections should be collapsible with arrow indicators
+- Patient header should have teal gradient background
+- Badges should have appropriate colors
+
+---
+
+### 10.3.7 Phase G Verification
+
+**Complete End-to-End Test:**
+
+1. **Start the server:**
+   ```bash
+   uvicorn app.main:app --reload --port 8005
+   ```
+
+2. **Login to med-z4:**
+   - Navigate to http://localhost:8005
+   - Login with valid credentials (e.g., `clinician.alpha@va.gov`)
+
+3. **Navigate to patient detail from dashboard:**
+   - Click "View" button on any patient in the roster
+   - Should navigate to `/patient/{icn}` URL
+   - Patient detail page should display
+
+4. **Verify patient detail page contents:**
+   - ✅ Patient header shows name, ICN, DOB, age, sex, SSN last 4
+   - ✅ "← Back to Roster" link is visible
+   - ✅ Vitals section displays with collapsible arrow
+   - ✅ Allergies section displays with severity badges
+   - ✅ Medications section displays with status badges
+   - ✅ "+ Add" buttons are visible but disabled (grayed out)
+
+5. **Test collapsible sections:**
+   - Click section headers to expand/collapse
+   - Arrow should rotate when expanded/collapsed
+   - Content should show/hide smoothly
+
+6. **Verify CCOW context auto-set:**
+   - Open med-z1 in another browser tab (same user logged in)
+   - Navigate to patient detail in med-z4
+   - Check med-z1 dashboard - same patient should be highlighted
+   - Confirms CCOW context was automatically set
+
+7. **Test back navigation:**
+   - Click "← Back to Roster" link
+   - Should return to dashboard
+   - Patient should still be highlighted (CCOW context preserved)
+
+8. **Test with patient that has no data:**
+   - Find patient with no vitals/allergies/medications
+   - Navigate to their detail page
+   - Should show "No data" empty states in sections
+
+**Success Criteria:**
+- ✅ Patient detail page loads successfully
+- ✅ All three data sections (vitals, allergies, medications) display
+- ✅ Collapsible sections work with HTML `<details>` element
+- ✅ CCOW context automatically set when viewing patient
+- ✅ Back navigation returns to dashboard
+- ✅ "+ Add" buttons visible but disabled (for Phase H)
+- ✅ Empty states display when no data exists
+
+---
+
+### 10.3.8 Troubleshooting Phase G
+
+**Issue: 404 error on `/patient/{icn}` route**
+
+**Solution:**
+- Verify `patient.py` router is registered in `app/main.py`
+- Check import: `from app.routes import patient`
+- Check registration: `app.include_router(patient.router, tags=["patient"])`
+- Restart server: `uvicorn app.main:app --reload --port 8005`
+
+---
+
+**Issue: "Patient not found" redirect loop**
+
+**Solution:**
+- Verify ICN exists in database:
+  ```sql
+  SELECT icn, name_display FROM clinical.patient_demographics LIMIT 10;
+  ```
+- Check ICN format matches (e.g., `ICN100001` vs `100001`)
+- Verify `get_patient_demographics()` query uses correct ICN parameter
+
+---
+
+**Issue: Vitals/allergies/medications not displaying**
+
+**Solution:**
+- Check database has data for the patient:
+  ```sql
+  SELECT COUNT(*) FROM clinical.patient_vitals WHERE patient_key = 'ICN100001';
+  SELECT COUNT(*) FROM clinical.patient_allergies WHERE patient_key = 'ICN100001';
+  SELECT COUNT(*) FROM clinical.patient_medications_outpatient WHERE patient_key = 'ICN100001';
+  ```
+- Verify `patient_key` matches between demographics and clinical tables
+- Check for SQL query errors in server logs
+
+---
+
+**Issue: Collapsible sections not working**
+
+**Solution:**
+- Verify `<details>` and `<summary>` HTML elements are correctly nested
+- Check browser console for JavaScript errors
+- Test in modern browser (Safari, Chrome, Firefox all support `<details>`)
+- Verify CSS for `::before` arrow indicator is loading
+
+---
+
+**Issue: CCOW context not automatically set**
+
+**Solution:**
+- Verify CCOW Vault is running: `curl http://localhost:8001/ccow/health`
+- Check `set_active_patient()` is called in patient detail route
+- Verify session_id is valid (check cookies in browser dev tools)
+- Check server logs for CCOW service errors
+
+---
+
+**Issue: Badges not displaying with colors**
+
+**Solution:**
+- Verify CSS for badge variants is loaded:
+  ```css
+  .badge-success, .badge-danger, .badge-warning, .badge-info
+  ```
+- Check browser dev tools > Elements > Styles for applied CSS
+- Clear browser cache and refresh
+
+---
+
+**Issue: "← Back to Roster" link not working**
+
+**Solution:**
+- Verify link href is `/dashboard` (not `/roster` or other URL)
+- Check that dashboard route is still registered
+- Test link in browser address bar directly: `http://localhost:8005/dashboard`
+
+---
+
+**Reference:**
+- Database schema: `docs/spec/postgres-db-reference.md`
+- Patient service layer: `app/services/patient_service.py`
+- Patient detail route: `app/routes/patient.py`
+- Patient detail template: `app/templates/patient_detail.html`
+
+---
+
+This completes Phase G! You now have a functional patient detail page with automatic CCOW context synchronization and placeholder buttons for Phase H (Patient CRUD).
+
+---
+
+### 10.3.9 Phase G Implementation Notes and Refinements
+
+**Implementation Completed:** 2026-01-28
+
+**Key Refinements Made During Implementation:**
+
+1. **CSS Variable Compatibility**
+   - Added alias variables to `:root` for Task G5 compatibility
+   - Variables added: `--primary-teal`, `--space-*`, `--text-*`, `--gray-*` scale
+   - Ensures consistency between existing CSS and new patient detail styles
+
+2. **Navigation Header Standardization**
+   - Standardized navigation across all pages with logout button
+   - Updated `base.html` to include `<div class="nav-user">` wrapper with logout button
+   - User display format: `{{ user.display_name }} | {{ user.email }}`
+   - Removed redundant logout button from dashboard content area
+   - CSS styling: `.nav-user` with flexbox layout
+
+3. **Spacing Optimizations**
+   - **Patient header:** Reduced padding from `var(--space-6)` to `var(--space-4) var(--space-6)` (vertical: 24px → 16px)
+   - **Patient name margin:** Reduced from `var(--space-3)` to `var(--space-2)` (12px → 8px)
+   - **Section headers:** Reduced padding from `var(--space-5)` to `var(--space-3)` (20px → 12px)
+   - **Section header font:** Reduced from `var(--text-xl)` to `var(--text-lg)` (20px → 18px)
+   - **Clinical sections:** Added `margin-bottom: var(--space-4)` for breathing room between sections
+
+4. **Table Styling Completion**
+   - Added complete `.data-table` styles that were missing from initial Task G5 CSS
+   - Headers: Teal background with white text, uppercase styling
+   - Cell padding: `var(--space-3) var(--space-4)` (12px × 16px) for proper column spacing
+   - Row striping with alternating background colors
+   - Hover effect with light teal background (`#ccfbf1`)
+   - Subtle gray borders between rows
+
+5. **CCOW Service Import Pattern**
+   - Patient route imports `ccow_service` singleton instance (not individual functions)
+   - Usage: `await ccow_service.set_active_patient(session_id, icn)`
+   - Note: `set_by="med-z4"` is hardcoded in service method
+
+6. **Dashboard Highlighting Fix**
+   - Dashboard template uses `patient.is_selected` field (set by route)
+   - CSS class: `.patient-selected` (not `.active-context`)
+   - Route sets `is_selected` based on CCOW context comparison
+
+**CSS Variables Added to `:root`:**
+```css
+/* Aliases for Phase G compatibility */
+--primary-teal: #0d9488;
+--primary-600: #0f766e;
+--primary-700: #0d9488;
+
+/* Spacing scale */
+--space-1: 0.25rem;  /* 4px */
+--space-2: 0.5rem;   /* 8px */
+--space-3: 0.75rem;  /* 12px */
+--space-4: 1rem;     /* 16px */
+--space-5: 1.25rem;  /* 20px */
+--space-6: 1.5rem;   /* 24px */
+--space-8: 2rem;     /* 32px */
+--space-12: 3rem;    /* 48px */
+
+/* Text size scale */
+--text-xs: 0.75rem;   /* 12px */
+--text-sm: 0.875rem;  /* 14px */
+--text-base: 1rem;    /* 16px */
+--text-lg: 1.125rem;  /* 18px */
+--text-xl: 1.25rem;   /* 20px */
+--text-2xl: 1.5rem;   /* 24px */
+--text-3xl: 1.875rem; /* 30px */
+
+/* Gray scale */
+--gray-50: #f9fafb;
+--gray-100: #f3f4f6;
+--gray-200: #e5e7eb;
+--gray-400: #9ca3af;
+--gray-600: #4b5563;
+--gray-700: #374151;
+--gray-900: #111827;
+```
+
+**Final Implementation Status:**
+- ✅ All Task G1-G5 completed with refinements
+- ✅ Patient detail page displays demographics, vitals, allergies, medications
+- ✅ CCOW context automatically set on page load
+- ✅ Collapsible sections using native HTML `<details>` element
+- ✅ Professional table styling with proper spacing
+- ✅ Empty state handling for medications (no active meds in database)
+- ✅ Consistent navigation header across all pages
+- ✅ Compact, professional UI with optimized spacing
+
+**Known Considerations:**
+- Medications query filters for `is_active = TRUE` only
+- Current database has 0 active medications across all patients (expected behavior)
+- Empty state message displays correctly: "No active medications"
+- Medication data can be added via med-z1 data loading mechanism
 
 ---
 

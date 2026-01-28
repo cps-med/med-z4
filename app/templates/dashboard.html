@@ -20,11 +20,6 @@
 
 <div class="dashboard-header">
     <h2>Patient Roster</h2>
-    <div class="header-actions">
-        <form method="POST" action="/logout" style="display: inline;">
-            <button type="submit" class="btn-secondary">Logout</button>
-        </form>
-    </div>
 </div>
 
 <div class="patient-roster-card">
@@ -39,29 +34,19 @@
             </tr>
         </thead>
         <tbody>
-        {% for patient in patients %}
-        <tr class="{% if patient.is_selected %}patient-selected{% endif %}">
-            <td class="patient-name">{{ patient.name_display }}</td>
-            <td>{{ patient.icn }}</td>
-            <td>{{ patient.dob }}</td>
-            <td>{{ patient.ssn_last4 }}</td>
-            <td>
-                <button
-                    class="btn btn-primary"
-                    hx-post="/patient/select/{{ patient.icn }}"
-                    hx-swap="none"
-                    hx-on::after-request="
-                        if(event.detail.successful) {
-                            const data = JSON.parse(event.detail.xhr.response);
-                            alert('Context set to: ' + data.patient_name + ' (ICN: ' + data.patient_icn + ')');
-                            window.location.reload();
-                        }
-                    ">
-                    View
-                </button>
-            </td>
-        </tr>
-        {% endfor %}
+            {% for patient in patients %}
+                <tr class="{% if patient.is_selected %}patient-selected{% endif %}">
+                <td class="patient-name">{{ patient.name_display }}</td>
+                <td>{{ patient.icn }}</td>
+                <td>{{ patient.dob }}</td>
+                <td>{{ patient.ssn_last4 }}</td>
+                <td>
+                    <div class="actions-cell">
+                        <a href="/patient/{{ patient.icn }}" class="btn btn-sm">View</a>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
         </tbody>
     </table>
 </div>

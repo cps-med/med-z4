@@ -263,22 +263,50 @@ The design document (`docs/spec/med-z4-design.md`) defines implementation phases
 - Gray color palette and `.btn-outline` button variant
 - Bidirectional context synchronization with med-z1 verified
 
+### Completed Phases
+
+**Phase E: Real Authentication** (Section 10.1) ✅
+- SQLAlchemy models: User, Session, AuditLog
+- Authentication service with bcrypt password hashing
+- Session validation and expiration handling
+- Account locking after failed login attempts
+- Audit logging for security events
+
+**Phase F: CCOW Integration** (Section 10.2) ✅
+- CCOW service with v2.1 API (`get_active_patient`, `set_active_patient`, `clear_active_patient`)
+- X-Session-ID header authentication pattern
+- Dashboard displays current CCOW context on load
+- CCOW banner with active/inactive states (`partials/ccow_banner.html`)
+- HTMX polling endpoint (`/context/banner`) with 5-second refresh
+- Patient selection endpoint (`/patient/select/{icn}`) for setting context
+- Context clear endpoint (`/context/clear`) with "Clear" button in banner
+- Patient row highlighting (`.patient-selected` CSS class)
+- Bidirectional context synchronization with med-z1 verified
+
+**Phase G: Patient Detail Page** (Section 10.3) ✅
+- Patient service layer (`app/services/patient_service.py`) with data-fetching functions
+- Patient detail route (`/patient/{icn}`) with automatic CCOW context setting
+- Patient detail template with collapsible sections using HTML `<details>` elements
+- Three clinical data sections: Vitals, Allergies, Medications
+- Professional table formatting with proper spacing
+- Empty state handling for missing data
+- Compact section headers and patient demographics display
+- Consistent navigation header with logout button across all pages
+- "← Back to Roster" navigation link
+- Placeholder "+ Add" buttons (disabled) for Phase H CRUD operations
+
 ### In Progress
 
-None - All planned phases through Phase F are complete.
+None - All planned phases through Phase G are complete.
 
 ### Planned Phases
-
-**Phase G: Patient Detail Page** (Coming Soon)
-- Patient detail view with clinical data
-- Tabbed interface for different data categories
-- Integration with CCOW context
 
 **Phase H: Patient CRUD** (Coming Soon)
 - Create/edit patient data
 - Form validation and error handling
+- Implement functionality for "+ Add" buttons from Phase G
 
-**Current Status:** Phase E and Phase F complete. Ready to begin Phase G (Patient Detail Page).
+**Current Status:** Phase E, Phase F, and Phase G complete and deployed. Ready to begin Phase H (Patient CRUD).
 
 ## Authentication Patterns
 
