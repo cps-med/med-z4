@@ -442,10 +442,11 @@ curl -X DELETE \
 ## Reference Documentation
 
 - **Design Specification:** `docs/spec/med-z4-design.md` - Complete technical design with implementation roadmap (Phases A-H)
-- **Database Reference:** `docs/spec/postgres-db-reference.md` - Detailed schema documentation for shared medz1 database
+- **Database Guide:** `docs/guide/med-z1-postgres-guide.md` - Comprehensive schema documentation for shared medz1 database with data source field values
 - **README:** Basic project overview and database connection info
 - **Section 10.1:** Phase E (Real Authentication) - Step-by-step authentication implementation
 - **Section 10.2:** Phase F (CCOW Integration) - CCOW v2.1 bidirectional context guide
+- **Section 10.3:** Phase G (Patient Detail Page) - Patient detail view implementation
 
 **CCOW v2.1 Reference Documentation:**
 - `docs/reference/med-z4-integration-quickstart.md` - 30-minute integration guide

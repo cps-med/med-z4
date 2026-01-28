@@ -140,7 +140,7 @@ med-z4 uses a different session cookie name (med_z4_session_id) than med-z1 (ses
 
 ### 2.3 Technology Stack
 
-med-z4 uses the exact same technology stack as med-z1 for consistency and learning transfer:
+med-z4 uses the exact same technology stack as med-z1 for consistency:
 
 | Layer | Technology | Version | Purpose |
 |-------|-----------|---------|---------|
@@ -1440,21 +1440,55 @@ async def generate_unique_icn(db: AsyncSession) -> str:
 
 **Source System Tagging:**
 
-All clinical tables include a `source_system` column to identify data origin:
+All clinical tables include a `source_system` (or `data_source` for vitals) column to identify data origin. See `docs/guide/med-z1-postgres-guide.md` for complete documentation.
 
-| Value | Description |
-|-------|-------------|
-| `'ETL'` | Data sourced from med-z1 ETL pipeline |
-| `'med-z4'` | Data created directly by med-z4 application |
-| `'VistA-RPC'` | Real-time data from VistA RPC Broker (T-0 layer) |
+**Defined Values (as of v1.3):**
+
+| Value | Description | Usage in med-z4 |
+|-------|-------------|-----------------|
+| `'CDWWork'` | VistA-based data from CDWWork database (historical) + VistA RPC Broker (real-time T-0) | Read-only (ETL-sourced) |
+| `'CDWWork2'` | Cerner-based data from CDWWork2 database (historical harmonized data) | Read-only (ETL-sourced) |
+| `'CALCULATED'` | Derived/calculated values (e.g., BMI computed from height/weight) | Read-only (computed) |
+| `'med-z4'` | **User-entered data created directly by med-z4 application** | **CREATE operations** (Phase H) |
+
+**Important Notes:**
+- Values `'ETL'` and `'VistA-RPC'` are **NOT used** (deprecated from earlier design)
+- VistA real-time data uses `'CDWWork'` label (not a distinct value)
+- med-z4 should **always use `'med-z4'`** when creating new clinical records
 
 **ETL Refresh Behavior:**
 
-1. ETL drops all rows with `source_system='ETL'` and reloads from Gold Parquet
-2. Rows with `source_system='med-z4'` are **NOT deleted**
-3. Result: med-z4-created data survives ETL refreshes
+1. ETL refreshes reload `'CDWWork'` and `'CDWWork2'` data from source systems
+2. Rows with `source_system='med-z4'` are **ephemeral** and may be wiped during ETL refreshes
+3. **Sandcastle model:** med-z4 data is for testing; clean slate on ETL refresh ensures no stale test data accumulates
 
-### 9.4 Clinical Data Models (app/models/clinical.py)
+**Future Enhancement (Post-Phase H):**
+- Add capability to **edit existing records** (both `'med-z4'` and ETL-sourced `'CDWWork'`/`'CDWWork2'` records)
+- Current Phase H scope: **CREATE-only** operations
+
+---
+
+### 9.4 Phase H CRUD Scope
+
+**Phase H will allow creating the following clinical data types:**
+
+| Table | Operation | Display on Patient Detail | Notes |
+|-------|-----------|---------------------------|-------|
+| `patient_demographics` | CREATE | Section 1: Demographics | 999-series ICN patients only |
+| `patient_vitals` | CREATE | Section 2: Vitals | All vital types (BP, HR, Temp, WT, HT, etc.) |
+| `patient_allergies` | CREATE | Section 3: Allergies | Drug, food, environmental allergies |
+| `patient_clinical_notes` | CREATE | **Section 5: Clinical Notes** (NEW) | Progress notes, clinical observations |
+| `patient_medications_outpatient` | READ ONLY | Section 4: Medications | ETL-sourced only (complex prescribing logic) |
+
+**Important Notes:**
+- All created records tagged with `source_system='med-z4'` (or `data_source='med-z4'` for vitals)
+- Medications remain **read-only** (no "+ Add Medication" button)
+- Clinical Notes section will be **added in Phase H** as the 5th collapsible section
+- Phase G currently shows 4 sections; Phase H adds the 5th
+
+---
+
+### 9.5 Clinical Data Models (app/models/clinical.py)
 
 ```python
 # app/models/clinical.py
@@ -2812,15 +2846,19 @@ Once Phase D is complete, proceed with the remaining phases:
 - Bidirectional context synchronization with med-z1
 - No local database table needed (CCOW Vault is source of truth)
 
-**Phase G: Patient Detail Page** (Coming Soon)
-- Create patient detail view
-- Display clinical data (vitals, allergies, medications, notes)
-- Tabbed interface for different data categories
+**Phase G: Patient Detail Page** ✅ (Complete)
+- Patient detail view with automatic CCOW context synchronization
+- Display clinical data: Demographics, Vitals, Allergies, Medications (read-only)
+- Collapsible sections using HTML `<details>` elements
+- Professional table formatting
+- Placeholder "+ Add" buttons for Phase H
 
 **Phase H: Patient CRUD** (Coming Soon)
-- Add "New Patient" form
-- Create/edit vitals, allergies, medications, notes
+- Add Clinical Notes as 5th section on patient detail page
+- Create forms: New Patient, Add Vital, Add Allergy, Add Clinical Note
 - Form validation and error handling
+- All created data tagged with `source_system='med-z4'`
+- Medications remain read-only (ETL-sourced only)
 
 **Implementation Strategy:**
 - Complete one phase fully before starting the next
@@ -4926,7 +4964,7 @@ async def get_patient_demographics(db: AsyncSession, icn: str) -> Optional[Dict[
         "name_last": row[4],
         "dob": row[5].strftime("%Y-%m-%d") if row[5] else "N/A",
         "age": row[6] if row[6] else "N/A",
-        "sex": row[7] if row[7] else "Unknown",
+        "sex": row[7] if row[7] else "N/A",
         "ssn_last4": row[8] if row[8] else "N/A",
     }
 
@@ -5955,13 +5993,259 @@ Add patient detail styles to `app/static/css/style.css`:
 
 ---
 
-This completes Phase G! You now have a functional patient detail page with automatic CCOW context synchronization and placeholder buttons for Phase H (Patient CRUD).
+### 10.3.9 Task G6: Add Clinical Notes Service Function
+
+**Goal:** Add `get_patient_clinical_notes()` function to patient service layer to fetch clinical notes from database.
+
+Add this function to `app/services/patient_service.py` (after the `get_patient_medications` function):
+
+```python
+async def get_patient_clinical_notes(db: AsyncSession, patient_key: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """
+    Fetch recent clinical notes for a patient.
+    Returns list of clinical note dictionaries.
+    """
+    query = text("""
+        SELECT
+            document_title,
+            document_class,
+            reference_datetime,
+            author_name,
+            status,
+            text_preview,
+            source_system
+        FROM clinical.patient_clinical_notes
+        WHERE patient_key = :patient_key
+        ORDER BY reference_datetime DESC
+        LIMIT :limit
+    """)
+
+    result = await db.execute(query, {"patient_key": patient_key, "limit": limit})
+
+    notes = []
+    for row in result.fetchall():
+        notes.append({
+            "document_title": row[0] if row[0] else "N/A",
+            "document_class": row[1] if row[1] else "N/A",
+            "reference_datetime": row[2].strftime("%Y-%m-%d %H:%M") if row[2] else "N/A",
+            "author_name": row[3] if row[3] else "N/A",
+            "status": row[4] if row[4] else "N/A",
+            "text_preview": row[5] if row[5] else "N/A",
+            "source_system": row[6] if row[6] else "N/A",
+        })
+
+    return notes
+```
+
+**Verification:**
+```bash
+python -c "from app.services.patient_service import get_patient_clinical_notes; print('Clinical notes service imported successfully')"
+```
 
 ---
 
-### 10.3.9 Phase G Implementation Notes and Refinements
+### 10.3.10 Task G7: Update Patient Detail Route
 
-**Implementation Completed:** 2026-01-28
+**Goal:** Update the patient detail route to fetch clinical notes and pass them to the template.
+
+In `app/routes/patient.py`, make the following changes:
+
+**1. Add the import** (at the top with other service imports):
+```python
+from app.services.patient_service import (
+    get_patient_demographics,
+    get_patient_vitals,
+    get_patient_allergies,
+    get_patient_medications,
+    get_patient_clinical_notes  # Add this line
+)
+```
+
+**2. Update the route handler** (fetch clinical notes and add to template context):
+
+Find the section where clinical data is fetched:
+```python
+    # Fetch clinical data
+    vitals = await get_patient_vitals(db, patient["patient_key"])
+    allergies = await get_patient_allergies(db, patient["patient_key"])
+    medications = await get_patient_medications(db, patient["patient_key"])
+    clinical_notes = await get_patient_clinical_notes(db, patient["patient_key"])  # Add this line
+```
+
+Update the template context:
+```python
+    return templates.TemplateResponse(
+        "patient_detail.html",
+        {
+            "request": request,
+            "settings": settings,
+            "user": user_info,
+            "patient": patient,
+            "vitals": vitals,
+            "allergies": allergies,
+            "medications": medications,
+            "clinical_notes": clinical_notes,  # Add this line
+        }
+    )
+```
+
+**Verification:**
+- Restart server: `uvicorn app.main:app --reload --port 8005`
+- No startup errors should occur
+- Check server logs for any import errors
+
+---
+
+### 10.3.11 Task G8: Add Clinical Notes Section to Template
+
+**Goal:** Add the Clinical Notes section to the patient detail template, following the same pattern as Vitals/Allergies/Medications.
+
+In `app/templates/patient_detail.html`, add this section **after the Medications section** (before the closing `</div>` for `patient-detail-container`):
+
+```html
+        <!-- Clinical Notes Section -->
+        <div class="card">
+            <details class="collapsible-section" open>
+                <summary class="section-header">
+                    <h2 class="section-title">Clinical Notes ({{ clinical_notes|length }})</h2>
+                    <button class="btn btn-sm btn-outline add-btn" disabled>+ Add Note</button>
+                </summary>
+                <div class="section-content">
+                    {% if clinical_notes %}
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Date/Time</th>
+                                <th>Document Title</th>
+                                <th>Class</th>
+                                <th>Author</th>
+                                <th>Status</th>
+                                <th>Preview</th>
+                                <th>Source</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for note in clinical_notes %}
+                            <tr>
+                                <td>{{ note.reference_datetime }}</td>
+                                <td><strong>{{ note.document_title }}</strong></td>
+                                <td>{{ note.document_class }}</td>
+                                <td>{{ note.author_name }}</td>
+                                <td>
+                                    {% if note.status == 'COMPLETED' %}
+                                    <span class="badge badge-success">{{ note.status }}</span>
+                                    {% elif note.status == 'UNSIGNED' %}
+                                    <span class="badge badge-warning">{{ note.status }}</span>
+                                    {% else %}
+                                    <span class="badge badge-neutral">{{ note.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td class="note-preview-cell">{{ note.text_preview }}</td>
+                                <td>
+                                    <span class="badge {% if note.source_system == 'med-z4' %}badge-teal{% else %}badge-neutral{% endif %}">
+                                        {{ note.source_system }}
+                                    </span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <div class="empty-state">
+                        <p class="empty-message">No clinical notes</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </details>
+        </div>
+```
+
+**Note:** Make sure this is added **before** the closing `</div>` for the `patient-detail-container` and **before** the closing `</body>` and `</html>` tags.
+
+---
+
+### 10.3.12 Task G9: Add CSS for Clinical Notes
+
+**Goal:** Add CSS styling for clinical notes preview text and med-z4 badge.
+
+Add this CSS to `app/static/css/style.css`:
+
+```css
+/* Clinical Notes - Preview Cell */
+.note-preview-cell {
+    max-width: 400px;
+    white-space: normal;
+    line-height: 1.4;
+}
+
+/* Badge for med-z4 source */
+.badge-teal {
+    background-color: var(--primary-100, #ccfbf1);
+    color: var(--primary-700, #0d9488);
+}
+```
+
+**Location:** Add this after the existing badge styles (around the `.badge-info` section).
+
+**Verification:**
+- Refresh patient detail page
+- Clinical Notes preview text should wrap properly
+- med-z4 badge should display in teal color
+
+---
+
+### 10.3.13 Task G6-G9 Verification
+
+**Complete End-to-End Test:**
+
+1. **Restart the server:**
+   ```bash
+   uvicorn app.main:app --reload --port 8005
+   ```
+
+2. **Navigate to patient detail page:**
+   - Go to http://localhost:8005/dashboard
+   - Click "View" on any patient
+   - Should see **5 sections** now:
+     1. Demographics (patient header)
+     2. Vitals
+     3. Allergies
+     4. Medications
+     5. **Clinical Notes** (NEW)
+
+3. **Verify Clinical Notes section:**
+   - ✅ Section header shows "Clinical Notes (X)" with count
+   - ✅ "+ Add Note" button is visible but disabled (grayed out)
+   - ✅ If patient has notes, they display in table format with 7 columns
+   - ✅ If no notes, shows "No clinical notes" empty state
+   - ✅ Section is collapsible (click header to expand/collapse)
+   - ✅ Arrow indicator rotates when expanded/collapsed
+
+4. **Check data display:**
+   - Date/Time formatted correctly
+   - Document title in bold
+   - Status badges colored appropriately (green for COMPLETED, yellow for UNSIGNED)
+   - Preview text wraps and doesn't overflow
+   - Source badges display (teal for 'med-z4', gray for others)
+
+5. **Check styling consistency:**
+   - Clinical Notes table matches styling of Vitals/Allergies/Medications tables
+   - Section spacing matches other sections
+   - Header padding consistent with other section headers
+
+**Success Criteria:**
+- ✅ Clinical Notes service function works
+- ✅ Patient detail route fetches and passes clinical notes
+- ✅ Clinical Notes section displays on patient detail page
+- ✅ Empty state works when no notes exist
+- ✅ All 5 sections display with consistent styling
+- ✅ "+ Add Note" button visible but disabled (for Phase H)
+
+---
+
+### 10.3.14 Phase G Implementation Notes and Refinements
+
+**Implementation Completed:** 2026-01-28 (Tasks G1-G5), Extended 2026-01-28 (Tasks G6-G9)
 
 **Key Refinements Made During Implementation:**
 
@@ -6001,6 +6285,15 @@ This completes Phase G! You now have a functional patient detail page with autom
    - Dashboard template uses `patient.is_selected` field (set by route)
    - CSS class: `.patient-selected` (not `.active-context`)
    - Route sets `is_selected` based on CCOW context comparison
+
+7. **Sex Field Correction** (2026-01-28)
+   - **Issue:** `get_patient_demographics()` was missing `sex` field
+   - **Template Requirement:** `patient_detail.html` displays Sex in patient header
+   - **Database Reality:** `sex` field exists (TEXT: "M"/"F"), `gender` field does NOT exist in actual schema
+   - **Documentation Note:** `postgres-db-reference.md` incorrectly listed `gender` field - actual table only has `sex`
+   - **Fix Applied:** Added `sex` field to service query and return dictionary
+   - **Row Mapping:** `sex` = row[7], `ssn_last4` = row[8]
+   - **Usage:** Patient detail page displays `sex`; Dashboard enhancement (Section 10.4) will also use `sex` field
 
 **CSS Variables Added to `:root`:**
 ```css
@@ -6053,6 +6346,285 @@ This completes Phase G! You now have a functional patient detail page with autom
 - Current database has 0 active medications across all patients (expected behavior)
 - Empty state message displays correctly: "No active medications"
 - Medication data can be added via med-z1 data loading mechanism
+
+---
+
+**This completes Phase G!** You now have a functional patient detail page with 5 clinical data sections (Demographics, Vitals, Allergies, Medications, Clinical Notes), CCOW context synchronization, and professional UI styling. All sections display in read-only mode with "+ Add" buttons disabled. Phase H will make these buttons functional to support patient data CRUD operations.
+
+---
+
+## 10.4 Dashboard Enhancement: Expanded Patient Roster
+
+**Implementation Date:** 2026-01-28
+
+**Goal:** Enhance the patient roster table on the dashboard to display additional demographic fields (Age, Sex, Station) and widen the main content area to accommodate the expanded table.
+
+### Overview
+
+This enhancement adds three new columns to the patient roster table:
+- **Age** (from `clinical.patient_demographics.age`)
+- **Sex** (from `clinical.patient_demographics.sex`)
+- **Station** (from `clinical.patient_demographics.primary_station`)
+
+The main content container width is increased from `920px` to `1200px` to comfortably display 8 columns without horizontal scrolling.
+
+### Implementation Steps
+
+This enhancement requires updates to **3 files**:
+1. `app/routes/dashboard.py` - Add new fields to SQL query
+2. `app/templates/dashboard.html` - Add new table columns
+3. `app/static/css/style.css` - Widen main container
+
+---
+
+### Step 1: Update Dashboard Route Query
+
+**File:** `app/routes/dashboard.py`
+
+**Change:** Update the SQL query in the `dashboard()` function to include the new fields.
+
+**Find this SQL query** (lines 46-56):
+```python
+    result = await db.execute(
+        text("""
+            SELECT
+                patient_key,
+                icn,
+                name_display,
+                dob,
+                ssn_last4
+            FROM clinical.patient_demographics
+            ORDER BY name_last, name_first
+            LIMIT 50
+        """)
+    )
+```
+
+**Replace with:**
+```python
+    result = await db.execute(
+        text("""
+            SELECT
+                patient_key,
+                icn,
+                name_display,
+                dob,
+                age,
+                sex,
+                ssn_last4,
+                primary_station
+            FROM clinical.patient_demographics
+            ORDER BY name_last, name_first
+            LIMIT 50
+        """)
+    )
+```
+
+**Update the patient list comprehension** (lines 59-69):
+
+**Find:**
+```python
+    patients = [
+        {
+            "patient_key": row[0],
+            "icn": row[1],
+            "name_display": row[2],
+            "dob": row[3].strftime("%Y-%m-%d") if row[3] else "N/A",
+            "ssn_last4": row[4] or "N/A",
+            "is_selected": row[1] == current_patient_icn  # Highlight current context patient
+        }
+        for row in result.fetchall()
+    ]
+```
+
+**Replace with:**
+```python
+    patients = [
+        {
+            "patient_key": row[0],
+            "icn": row[1],
+            "name_display": row[2],
+            "dob": row[3].strftime("%Y-%m-%d") if row[3] else "—",
+            "age": row[4] if row[4] is not None else "—",
+            "sex": row[5] or "—",
+            "ssn_last4": row[6] or "—",
+            "primary_station": row[7] or "—",
+            "is_selected": row[1] == current_patient_icn  # Highlight current context patient
+        }
+        for row in result.fetchall()
+    ]
+```
+
+---
+
+### Step 2: Update Dashboard Template
+
+**File:** `app/templates/dashboard.html`
+
+**Change:** Add three new table header columns and three new data columns.
+
+**Find the table header** (lines 26-35):
+```html
+<div class="patient-roster-card">
+    <table class="patient-table">
+        <thead>
+            <tr>
+                <th>Patient Name</th>
+                <th>ICN</th>
+                <th>DOB</th>
+                <th>SSN (Last 4)</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+```
+
+**Replace with:**
+```html
+<div class="patient-roster-card">
+    <table class="patient-table">
+        <thead>
+            <tr>
+                <th>Patient Name</th>
+                <th>ICN</th>
+                <th>DOB</th>
+                <th>Age</th>
+                <th>Sex</th>
+                <th>SSN (Last 4)</th>
+                <th>Station</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+```
+
+**Find the table body rows** (lines 36-50):
+```html
+        <tbody>
+            {% for patient in patients %}
+                <tr class="{% if patient.is_selected %}patient-selected{% endif %}">
+                <td class="patient-name">{{ patient.name_display }}</td>
+                <td>{{ patient.icn }}</td>
+                <td>{{ patient.dob }}</td>
+                <td>{{ patient.ssn_last4 }}</td>
+                <td>
+                    <div class="actions-cell">
+                        <a href="/patient/{{ patient.icn }}" class="btn btn-sm">View</a>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+```
+
+**Replace with:**
+```html
+        <tbody>
+            {% for patient in patients %}
+                <tr class="{% if patient.is_selected %}patient-selected{% endif %}">
+                <td class="patient-name">{{ patient.name_display }}</td>
+                <td>{{ patient.icn }}</td>
+                <td>{{ patient.dob }}</td>
+                <td>{{ patient.age }}</td>
+                <td>{{ patient.sex }}</td>
+                <td>{{ patient.ssn_last4 }}</td>
+                <td>{{ patient.primary_station }}</td>
+                <td>
+                    <div class="actions-cell">
+                        <a href="/patient/{{ patient.icn }}" class="btn btn-sm">View</a>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+```
+
+---
+
+### Step 3: Update CSS Container Width
+
+**File:** `app/static/css/style.css`
+
+**Change:** Increase the main container max-width from `920px` to `1200px`.
+
+**Find the `.container` rule** (around line 151):
+```css
+.container {
+    max-width: 920px;
+    margin: var(--spacing-xl) auto;
+    padding: 0 var(--spacing-md);
+}
+```
+
+**Replace with:**
+```css
+.container {
+    max-width: 1200px;
+    margin: var(--spacing-xl) auto;
+    padding: 0 var(--spacing-md);
+}
+```
+
+---
+
+### Verification
+
+After making these changes:
+
+1. **Restart the server:**
+   ```bash
+   # If server is running, stop it (Ctrl+C) and restart:
+   uvicorn app.main:app --reload --port 8005
+   ```
+
+2. **Navigate to the dashboard:**
+   ```
+   http://localhost:8005/dashboard
+   ```
+
+3. **Verify the patient roster displays 8 columns:**
+   - ✅ Patient Name (bold styling preserved with `.patient-name` class)
+   - ✅ ICN
+   - ✅ DOB
+   - ✅ Age (integer or "—")
+   - ✅ Sex (single character: "M", "F", or "—")
+   - ✅ SSN (Last 4) (text or "—")
+   - ✅ Station (code like "508" or "—")
+   - ✅ Actions (View button)
+
+4. **Verify layout:**
+   - Table should display comfortably without horizontal scrolling on standard displays
+   - Patient names should remain bold (`.patient-name` class)
+   - Active patient should remain highlighted with teal background (`.patient-selected` class)
+
+5. **Test NULL handling:**
+   - Verify patients with missing age/sex/station show "—" instead of "N/A" or blank
+
+---
+
+### Implementation Notes
+
+**Data Mappings:**
+- `row[4]` → `age` (INTEGER, may be NULL)
+- `row[5]` → `sex` (TEXT, may be NULL) - Values: "M", "F"
+- `row[6]` → `ssn_last4` (TEXT, may be NULL)
+- `row[7]` → `primary_station` (TEXT, may be NULL) - Station codes like "508", "200"
+
+**NULL Handling:**
+- Changed from `"N/A"` to `"—"` (em dash) for cleaner visual appearance
+- Applies to all nullable fields: DOB, Age, Sex, SSN Last 4, Station
+
+**Responsive Design:**
+- Container width of `1200px` balances between:
+  - Dashboard: Enough space for 8 columns
+  - Patient detail: Keeps wider `1400px` for clinical data tables
+
+**Column Order Rationale:**
+- Demographic fields grouped together: Name → ICN → DOB → Age → Sex
+- Administrative fields: SSN → Station
+- Actions always last column
+
+---
+
+**This completes the Dashboard Enhancement!** The patient roster now displays comprehensive demographic information at a glance, supporting clinical workflows that require quick access to patient age, sex, and facility assignment.
 
 ---
 
@@ -9377,25 +9949,31 @@ LIMIT 20;
 - No persistence guarantee beyond test session
 - **Mitigation:** Document clearly in UI ("Test Data - Not Persistent")
 
-**No Update/Delete:**
-- Phase 1-8 only supports CREATE operations
-- Cannot edit or delete existing records
-- **Future:** Add PATCH /patients/{icn}, DELETE /patients/{icn}
+**No Update/Delete (Phase H Limitation):**
+- Phase H only supports CREATE operations
+- Cannot edit existing records (med-z4-created or ETL-sourced)
+- Cannot delete records
+- **Future Enhancement:** Add full CRUD capabilities
+  - Edit med-z4-created records (`source_system='med-z4'`)
+  - Edit ETL-sourced records (`source_system='CDWWork'` or `'CDWWork2'`)
+  - Delete records (soft delete with audit trail)
+  - API endpoints: `PATCH /patients/{icn}`, `DELETE /patients/{icn}`, etc.
 
 **Limited Validation:**
 - Minimal business logic validation (relies on database constraints)
 - No duplicate name checking
 - **Future:** Add validation layer (Pydantic schemas)
 
-### 13.2 Future Enhancements (Post-Phase 8)
+### 13.2 Future Enhancements (Post-Phase H)
 
 | Phase | Feature | Description |
 |-------|---------|-------------|
-| 9 | Advanced CRUD | Update/delete patients and clinical data |
-| 10 | Data Validation | Pydantic schemas, business rules |
-| 11 | Search & Filter | Full-text search, demographic filters, pagination |
-| 12 | Audit Trail UI | View all data creation events in med-z4 |
-| 13 | ETL Integration | Protected data that survives ETL refreshes |
+| I | Edit Existing Records | **UPDATE operations:** Edit med-z4-created and ETL-sourced clinical records (vitals, allergies, notes); Edit patient demographics; Soft delete with audit trail |
+| J | Advanced CRUD | DELETE operations with confirmation dialogs; Batch operations; Undo/redo capability |
+| K | Data Validation | Pydantic schemas for all forms; Business rule validation (age ranges, date logic); Duplicate detection |
+| L | Search & Filter | Full-text search across clinical data; Advanced demographic filters; Pagination for large datasets |
+| M | Audit Trail UI | View all data creation/modification events; Filter by user, date, table; Export audit logs |
+| N | ETL Integration | Protected data that survives ETL refreshes; Persistent test data option; Data export/import |
 
 ---
 

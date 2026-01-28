@@ -149,7 +149,7 @@ body {
    ========================================================== */
 
 .container {
-    max-width: 920px;
+    max-width: 1200px;
     margin: var(--spacing-xl) auto;
     padding: 0 var(--spacing-md);
 }
@@ -800,9 +800,31 @@ label {
     color: #1e40af;
 }
 
+/* Badge for med-z4 source */
+.badge-teal {
+    background-color: var(--primary-100, #ccfbf1);
+    color: var(--primary-700, #0d9488);
+}
+
 /* Navigation User Display */
 .nav-user {
     display: flex;
     align-items: center;
     gap: var(--space-4);
+}
+
+/* =====================================================
+   Clinical Notes - Preview Cell
+   ===================================================== */
+
+.note-preview-cell {
+    max-width: 400px;
+    white-space: normal;
+    line-height: 1.4;
+}
+
+/* Badge for med-z4 source */
+.badge-teal {
+    background-color: var(--primary-100, #ccfbf1);
+    color: var(--primary-700, #0d9488);
 }

@@ -47,7 +47,7 @@ async def get_patient_demographics(db: AsyncSession, icn: str) -> Optional[Dict[
         "name_last": row[4],
         "dob": row[5].strftime("%Y-%m-%d") if row[5] else "N/A",
         "age": row[6] if row[6] else "N/A",
-        "sex": row[7] if row[7] else "Unknown",
+        "sex": row[7] if row[7] else "N/A",
         "ssn_last4": row[8] if row[8] else "N/A",
     }
 
@@ -170,3 +170,39 @@ async def get_patient_medications(db: AsyncSession, patient_key: str, limit: int
         })
 
     return medications
+
+async def get_patient_clinical_notes(db: AsyncSession, patient_key: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """
+    Fetch recent clinical notes for a patient.
+    Returns list of clinical note dictionaries.
+    """
+    query = text("""
+        SELECT
+            document_title,
+            document_class,
+            reference_datetime,
+            author_name,
+            status,
+            text_preview,
+            source_system
+        FROM clinical.patient_clinical_notes
+        WHERE patient_key = :patient_key
+        ORDER BY reference_datetime DESC
+        LIMIT :limit
+    """)
+
+    result = await db.execute(query, {"patient_key": patient_key, "limit": limit})
+
+    notes = []
+    for row in result.fetchall():
+        notes.append({
+            "document_title": row[0] if row[0] else "N/A",
+            "document_class": row[1] if row[1] else "N/A",
+            "reference_datetime": row[2].strftime("%Y-%m-%d %H:%M") if row[2] else "N/A",
+            "author_name": row[3] if row[3] else "N/A",
+            "status": row[4] if row[4] else "N/A",
+            "text_preview": row[5] if row[5] else "N/A",
+            "source_system": row[6] if row[6] else "N/A",
+        })
+
+    return notes

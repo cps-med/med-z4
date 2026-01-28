@@ -11,7 +11,8 @@
 
 1. [Overview](#overview)
 2. [Database Schema Organization](#database-schema-organization)
-3. [Schema: `clinical`](#schema-clinical)
+3. [Data Source System Field Values](#data-source-system-field-values)
+4. [Schema: `clinical`](#schema-clinical)
    - [patient_demographics](#table-clinicalpatient_demographics)
    - [patient_vitals](#table-clinicalpatient_vitals)
    - [patient_flags](#table-clinicalpatient_flags)
@@ -24,19 +25,19 @@
    - [patient_labs](#table-clinicalpatient_labs)
    - [patient_clinical_notes](#table-clinicalpatient_clinical_notes)
    - [patient_immunizations](#table-clinicalpatient_immunizations)
-4. [Schema: `reference`](#schema-reference)
+5. [Schema: `reference`](#schema-reference)
    - [vaccine](#table-referencevaccine)
-5. [Schema: `auth`](#schema-auth)
+6. [Schema: `auth`](#schema-auth)
    - [users](#table-authusers)
    - [sessions](#table-authsessions)
    - [audit_logs](#table-authaudit_logs)
-6. [Schema: `public` (AI Checkpoint Tables)](#schema-public-ai-checkpoint-tables)
+7. [Schema: `public` (AI Checkpoint Tables)](#schema-public-ai-checkpoint-tables)
    - [checkpoints](#table-publiccheckpoints)
    - [checkpoint_writes](#table-publiccheckpoint_writes)
    - [checkpoint_blobs](#table-publiccheckpoint_blobs)
    - [checkpoint_migrations](#table-publiccheckpoint_migrations)
-7. [Common Query Patterns](#common-query-patterns)
-8. [Data Volume Estimates](#data-volume-estimates)
+8. [Common Query Patterns](#common-query-patterns)
+9. [Data Volume Estimates](#data-volume-estimates)
 
 ---
 
@@ -70,6 +71,210 @@ The med-z1 database is organized into four functional schemas:
 
 ---
 
+## Data Source System Field Values
+
+Most clinical tables in the `clinical` schema include a `source_system` or `data_source` field to track the origin of each record. This section documents the **defined values** used across the med-z1 application.
+
+### Field Names
+
+| Field Name | Used In | Description |
+|------------|---------|-------------|
+| `source_system` | Most clinical tables | Tracks origin system for historical data (T-1 and earlier) |
+| `data_source` | `patient_vitals` only | Tracks origin system including real-time and calculated data |
+
+**Note:** `patient_vitals` uses `data_source` instead of `source_system` to distinguish real-time VistA data and calculated values (BMI).
+
+---
+
+### Defined Values
+
+The following are the **only valid values** for `source_system` / `data_source` fields in med-z1:
+
+#### 1. `CDWWork` (Primary Value)
+
+**Origin:** VistA-based data from mock CDWWork SQL Server database
+
+**Usage:**
+- Historical data (T-1 and earlier) from CDWWork database via ETL pipelines
+- **Real-time data (T-0, today)** from VistA RPC Broker Simulator
+
+**Tables Using This Value:**
+- `patient_demographics` (historical only)
+- `patient_vitals` (historical + real-time VistA)
+- `patient_flags` (historical only)
+- `patient_flag_history` (historical only)
+- `patient_allergies` (historical only)
+- `patient_medications_outpatient` (historical + real-time VistA)
+- `patient_medications_inpatient` (historical + real-time VistA)
+- `patient_encounters` (historical + real-time VistA)
+- `patient_labs` (historical only)
+- `patient_clinical_notes` (historical only)
+- `patient_immunizations` (historical only)
+
+**Important Design Note:**
+Real-time VistA RPC Broker data (T-0, current day) is **intentionally labeled as `"CDWWork"`** to maintain UI consistency. VistA is the source system for CDWWork historical data, so real-time VistA data uses the same badge/label in the UI.
+
+**Example Query:**
+```sql
+-- Get all CDWWork vitals (includes both historical ETL and real-time VistA)
+SELECT * FROM clinical.patient_vitals
+WHERE patient_key = 'ICN100001'
+  AND data_source = 'CDWWork'
+ORDER BY taken_datetime DESC;
+```
+
+---
+
+#### 2. `CDWWork2`
+
+**Origin:** Cerner/Oracle Health-based data from mock CDWWork2 SQL Server database
+
+**Usage:**
+- Historical data (T-1 and earlier) from CDWWork2 database via ETL pipelines
+- Multi-source harmonization with CDWWork data
+
+**Tables Using This Value:**
+- `patient_vitals` (harmonized with CDWWork)
+- `patient_clinical_notes` (harmonized with CDWWork)
+- `patient_immunizations` (harmonized with CDWWork)
+
+**Data Harmonization:**
+Silver-layer ETL processes merge CDWWork and CDWWork2 data, resolving duplicates by preferring CDWWork2 (most recent source) when the same clinical event appears in both systems.
+
+**Example Query:**
+```sql
+-- Get all Cerner/Oracle Health vitals
+SELECT * FROM clinical.patient_vitals
+WHERE patient_key = 'ICN100001'
+  AND data_source = 'CDWWork2'
+ORDER BY taken_datetime DESC;
+```
+
+---
+
+#### 3. `CALCULATED`
+
+**Origin:** Derived/calculated values computed by med-z1 application
+
+**Usage:**
+- Calculated clinical metrics (e.g., BMI derived from height and weight)
+
+**Tables Using This Value:**
+- `patient_vitals` only
+
+**Example Calculated Values:**
+- **BMI (Body Mass Index):** Calculated from most recent weight (WT) and height (HT) vitals
+  - Formula: `BMI = weight_kg / (height_m)²`
+  - Computed in Gold layer ETL (`etl/gold_vitals.py`)
+
+**Example Query:**
+```sql
+-- Get calculated BMI values
+SELECT * FROM clinical.patient_vitals
+WHERE patient_key = 'ICN100001'
+  AND vital_abbr = 'BMI'
+  AND data_source = 'CALCULATED'
+ORDER BY taken_datetime DESC;
+```
+
+---
+
+#### 4. `med-z4`
+
+**Origin:** User-entered data created directly by med-z4 application
+
+**Usage:**
+- Clinical data created via med-z4 UI (manual data entry)
+- Test data for CCOW testing, UI validation, and feature development
+
+**Tables Using This Value:**
+- `patient_demographics` (999-series ICN patients created by med-z4)
+- `patient_vitals` (manually entered vitals)
+- `patient_allergies` (manually entered allergies)
+- `patient_clinical_notes` (clinical notes authored in med-z4)
+
+**Data Lifecycle:**
+- **Ephemeral ("Sandcastle Data"):** med-z4-created data is intended for testing and may be wiped during ETL refreshes
+- **Immediate visibility:** Data appears instantly in both med-z4 and med-z1 (shared database)
+- **Identification:** 999-series ICN format (e.g., `999V123456`) distinguishes med-z4 patients from ETL-sourced patients
+
+**Example Query:**
+```sql
+-- Get all med-z4 created patients
+SELECT icn, name_display, dob, source_system
+FROM clinical.patient_demographics
+WHERE source_system = 'med-z4'
+ORDER BY last_updated DESC;
+
+-- Get med-z4 created vitals for a patient
+SELECT * FROM clinical.patient_vitals
+WHERE patient_key = '999V123456'
+  AND data_source = 'med-z4'
+ORDER BY taken_datetime DESC;
+```
+
+---
+
+### Values NOT Used
+
+The following values are **NOT defined** in med-z1:
+
+- ❌ `ETL` - Not used (ETL processes set source to `CDWWork` or `CDWWork2`)
+- ❌ `VistA` - Not used as a distinct value (VistA data labeled as `CDWWork`)
+- ❌ `Cerner` - Not used (Cerner data labeled as `CDWWork2`)
+- ❌ `Manual` - Not used (use `med-z4` for user-entered data)
+
+---
+
+### Summary Table
+
+| Value | Type | Data Origin | Time Range | Tables |
+|-------|------|-------------|------------|--------|
+| `CDWWork` | Historical + Real-Time | VistA (CDWWork database + VistA RPC Broker) | T-1 and earlier (historical), T-0 (real-time) | Most clinical tables |
+| `CDWWork2` | Historical | Cerner/Oracle Health (CDWWork2 database) | T-1 and earlier | Vitals, Clinical Notes, Immunizations |
+| `CALCULATED` | Derived | med-z1 application logic | N/A (computed from other vitals) | Vitals only (BMI) |
+| `med-z4` | User-Entered | med-z4 application (manual data entry) | N/A (test/development data) | Demographics, Vitals, Allergies, Clinical Notes |
+
+---
+
+### Usage Notes for External Applications (e.g., med-z4)
+
+1. **Filtering by Source:**
+   - Use `source_system = 'CDWWork'` to get VistA-based data (both historical and real-time)
+   - Use `source_system = 'CDWWork2'` to get Cerner-based data
+   - Use `data_source = 'CALCULATED'` to get computed values (vitals only)
+   - Use `source_system = 'med-z4'` to get user-entered data from med-z4
+
+2. **Real-Time vs Historical:**
+   - `source_system` alone **cannot distinguish** real-time vs historical data
+   - Use date filtering to identify T-0 data: `taken_datetime >= CURRENT_DATE`
+
+3. **Multi-Source Queries:**
+   ```sql
+   -- Get all vitals from all sources
+   SELECT patient_key, vital_type, taken_datetime, data_source
+   FROM clinical.patient_vitals
+   WHERE patient_key = 'ICN100001'
+   ORDER BY taken_datetime DESC;
+
+   -- Count vitals by source
+   SELECT data_source, COUNT(*) AS vital_count
+   FROM clinical.patient_vitals
+   WHERE patient_key = 'ICN100001'
+   GROUP BY data_source;
+   ```
+
+4. **Database Sharing:**
+   - When med-z4 queries the medz1 database, expect 4 possible values: `CDWWork`, `CDWWork2`, `CALCULATED`, `med-z4`
+   - Do not hardcode filters that exclude `CALCULATED` or `med-z4` unless you specifically want to omit those data types
+
+5. **Creating Data from med-z4:**
+   - Always set `source_system = 'med-z4'` (or `data_source = 'med-z4'` for vitals) when creating new clinical records
+   - Use 999-series ICN format for new patients: `999V######`
+   - med-z4-created data is ephemeral and may be wiped during ETL refreshes
+
+---
+
 ## Schema: `clinical`
 
 The `clinical` schema contains patient-centric clinical data tables. All tables are keyed by `patient_key` (ICN).
@@ -97,8 +302,9 @@ The `clinical` schema contains patient-centric clinical data tables. All tables 
 | `name_display` | VARCHAR(200) | NULL | Formatted name for UI display (LAST, First) | `"DOOREE, ADAM"` |
 | `dob` | DATE | NULL | Date of birth | `"1956-03-15"` |
 | `age` | INTEGER | NULL | Current age calculated from DOB | `68` |
-| `sex` | TEXT | NULL | Biological sex | `"M"`, `"F"` |
-| `primary_station` | TEXT | NULL | Primary VA station (Sta3n) | `"508"`, `"200"` |
+| `sex` | VARCHAR(1) | NULL | Biological sex | `"M"`, `"F"` |
+| `gender` | VARCHAR(50) | NULL | Gender identity | `"Male"`, `"Female"`, `"Non-binary"` |
+| `primary_station` | VARCHAR(10) | NULL | Primary VA station (Sta3n) | `"508"`, `"200"` |
 | `primary_station_name` | VARCHAR(200) | NULL | Primary station name | `"Atlanta VA Medical Center"` |
 | `address_street1` | VARCHAR(100) | NULL | Primary address street line 1 | `"123 Main St"` |
 | `address_street2` | VARCHAR(100) | NULL | Primary address street line 2 | `"Apt 4B"` |
@@ -113,7 +319,7 @@ The `clinical` schema contains patient-centric clinical data tables. All tables 
 | `deceased_flag` | CHAR(1) | NULL | Deceased flag | `"Y"`, `"N"` |
 | `death_date` | DATE | NULL | Date of death (if deceased) | `"2023-05-20"` |
 | `veteran_status` | VARCHAR(50) | NULL | Veteran status | `"Veteran"` |
-| `source_system` | VARCHAR(20) | NULL | Data source system | `"CDWWork"` |
+| `source_system` | VARCHAR(20) | NULL | Data source system (see [Data Source System Field Values](#data-source-system-field-values)) | `"CDWWork"` |
 | `last_updated` | TIMESTAMP | NULL | Record last updated timestamp | `"2025-12-10 14:23:45"` |
 
 #### Indexes
@@ -166,7 +372,7 @@ The `clinical` schema contains patient-centric clinical data tables. All tables 
 | `entered_by` | VARCHAR(100) | NULL | Staff name who entered vital | `"NURSE, JANE"` |
 | `abnormal_flag` | VARCHAR(20) | NULL | Abnormality status | `"CRITICAL"`, `"HIGH"`, `"LOW"`, `"NORMAL"` |
 | `bmi` | DECIMAL(5,2) | NULL | Calculated BMI (if WT and HT available) | `25.3` |
-| `data_source` | VARCHAR(20) | NULL | Data origin | `"CDWWork"`, `"CDWWork2"`, `"CALCULATED"` |
+| `data_source` | VARCHAR(20) | NULL | Data origin (see [Data Source System Field Values](#data-source-system-field-values)) | `"CDWWork"` (historical + real-time VistA), `"CDWWork2"` (Cerner), `"CALCULATED"` (BMI) |
 | `last_updated` | TIMESTAMP | NULL | Record last updated timestamp | `"2025-12-10 08:35:00"` |
 
 #### Indexes
@@ -417,7 +623,7 @@ The `clinical` schema contains patient-centric clinical data tables. All tables 
 | `sta3n` | VARCHAR(10) | NULL | VA station number | `"508"` |
 | `cmop_indicator` | CHAR(1) | NULL | CMOP (mail-order) indicator | `"Y"`, `"N"` |
 | `mail_indicator` | CHAR(1) | NULL | Mail delivery indicator | `"Y"`, `"N"` |
-| `source_system` | VARCHAR(50) | NULL | Data source system | `"CDWWork"` |
+| `source_system` | VARCHAR(50) | NULL | Data source system (see [Data Source System Field Values](#data-source-system-field-values)) | `"CDWWork"` (historical + real-time VistA) |
 | `last_updated` | TIMESTAMP | NULL | Record last updated timestamp | `"2025-12-13 10:00:00"` |
 
 #### Indexes
@@ -490,7 +696,7 @@ The `clinical` schema contains patient-centric clinical data tables. All tables 
 | `ward_name` | VARCHAR(100) | NULL | Ward name | `"Medical ICU"` |
 | `facility_name` | VARCHAR(100) | NULL | Facility name | `"Atlanta VA Medical Center"` |
 | `sta3n` | VARCHAR(10) | NULL | VA station number | `"508"` |
-| `source_system` | VARCHAR(50) | NULL | Data source system | `"CDWWork"` |
+| `source_system` | VARCHAR(50) | NULL | Data source system (see [Data Source System Field Values](#data-source-system-field-values)) | `"CDWWork"` (historical + real-time VistA) |
 | `last_updated` | TIMESTAMP | NULL | Record last updated timestamp | `"2025-12-13 10:30:00"` |
 
 #### Indexes
@@ -549,7 +755,7 @@ The `clinical` schema contains patient-centric clinical data tables. All tables 
 | `is_extended_stay` | BOOLEAN | NOT NULL | Active admission with total_days > 14 | `true`, `false` |
 | `sta3n` | VARCHAR(10) | NULL | VA station number | `"508"` |
 | `facility_name` | VARCHAR(100) | NULL | Facility name | `"Atlanta VA Medical Center"` |
-| `source_system` | VARCHAR(50) | NULL | Data source system | `"CDWWork"` |
+| `source_system` | VARCHAR(50) | NULL | Data source system (see [Data Source System Field Values](#data-source-system-field-values)) | `"CDWWork"` (historical + real-time VistA) |
 | `last_updated` | TIMESTAMP | NULL | Record last updated timestamp | `"2025-12-15 09:00:00"` |
 
 #### Indexes
@@ -668,7 +874,7 @@ The `clinical` schema contains patient-centric clinical data tables. All tables 
 | `text_length` | INTEGER | NULL | Note text character count | `1250`, `3500` |
 | `text_preview` | VARCHAR(500) | NULL | First 200 characters of note text for list views | `"SUBJECTIVE: Patient reports chest pain..."` |
 | `tiu_document_ien` | VARCHAR(50) | NULL | TIU IEN (VistA identifier) | `"12345"` |
-| `source_system` | VARCHAR(50) | NULL | Data source system | `"CDWWork"`, `"CDWWork2"` |
+| `source_system` | VARCHAR(50) | NULL | Data source system (see [Data Source System Field Values](#data-source-system-field-values)) | `"CDWWork"` (VistA), `"CDWWork2"` (Cerner) |
 | `last_updated` | TIMESTAMP | NULL | Record last updated timestamp | `"2026-01-02 14:00:00"` |
 
 #### Indexes
@@ -728,7 +934,7 @@ The `clinical` schema contains patient-centric clinical data tables. All tables 
 | `comments` | TEXT | NULL | Free-text clinical notes | `"Patient tolerated vaccine well"` |
 | `is_annual_vaccine` | BOOLEAN | NULL | TRUE for annual influenza vaccines | `true`, `false` |
 | `is_covid_vaccine` | BOOLEAN | NULL | TRUE for COVID-19 vaccines | `true`, `false` |
-| `source_system` | VARCHAR(20) | NULL | Data source system | `"CDWWork"` (VistA), `"CDWWork2"` (Cerner) |
+| `source_system` | VARCHAR(20) | NULL | Data source system (see [Data Source System Field Values](#data-source-system-field-values)) | `"CDWWork"` (VistA), `"CDWWork2"` (Cerner) |
 | `last_updated` | TIMESTAMP | NULL | Record last updated timestamp | `"2026-01-14 10:00:00"` |
 
 #### Indexes
@@ -1357,6 +1563,8 @@ When building a simple EHR web app to test the med-z1 CCOW service:
 |---------|------|--------|-------------|
 | v1.0 | 2026-01-22 | Claude Code | Initial database reference documentation |
 | v1.1 | 2026-01-22 | Claude Code | Corrected AI checkpoint tables: schema=`public` (not `ai`), 4 tables (not 2), auto-created by LangGraph |
+| v1.2 | 2026-01-28 | Claude Code | Added comprehensive "Data Source System Field Values" section documenting CDWWork, CDWWork2, and CALCULATED values; clarified that VistA real-time data uses "CDWWork" label |
+| v1.3 | 2026-01-28 | Claude Code | Added `med-z4` as 4th data source value for user-entered data; updated usage notes for Phase H CRUD implementation |
 
 ---
 

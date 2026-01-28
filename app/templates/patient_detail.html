@@ -198,6 +198,62 @@
                 </div>
             </details>
         </div>
+
+        <!-- Clinical Notes Section -->
+        <div class="card">
+            <details class="collapsible-section" open>
+                <summary class="section-header">
+                    <h2 class="section-title">Clinical Notes ({{ clinical_notes|length }})</h2>
+                    <button class="btn btn-sm btn-outline add-btn" disabled>+ Add Note</button>
+                </summary>
+                <div class="section-content">
+                    {% if clinical_notes %}
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Date/Time</th>
+                                <th>Document Title</th>
+                                <th>Class</th>
+                                <th>Author</th>
+                                <th>Status</th>
+                                <th>Preview</th>
+                                <th>Source</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for note in clinical_notes %}
+                            <tr>
+                                <td>{{ note.reference_datetime }}</td>
+                                <td><strong>{{ note.document_title }}</strong></td>
+                                <td>{{ note.document_class }}</td>
+                                <td>{{ note.author_name }}</td>
+                                <td>
+                                    {% if note.status == 'COMPLETED' %}
+                                    <span class="badge badge-success">{{ note.status }}</span>
+                                    {% elif note.status == 'UNSIGNED' %}
+                                    <span class="badge badge-warning">{{ note.status }}</span>
+                                    {% else %}
+                                    <span class="badge badge-neutral">{{ note.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td class="note-preview-cell">{{ note.text_preview }}</td>
+                                <td>
+                                    <span class="badge {% if note.source_system == 'med-z4' %}badge-teal{% else %}badge-neutral{% endif %}">
+                                        {{ note.source_system }}
+                                    </span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <div class="empty-state">
+                        <p class="empty-message">No clinical notes</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </details>
+        </div>
     </div>
 </body>
 </html>

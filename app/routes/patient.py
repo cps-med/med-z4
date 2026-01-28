@@ -16,7 +16,8 @@ from app.services.patient_service import (
     get_patient_demographics,
     get_patient_vitals,
     get_patient_allergies,
-    get_patient_medications
+    get_patient_medications,
+    get_patient_clinical_notes
 )
 from config import settings
 
@@ -58,6 +59,7 @@ async def patient_detail(
     vitals = await get_patient_vitals(db, patient["patient_key"])
     allergies = await get_patient_allergies(db, patient["patient_key"])
     medications = await get_patient_medications(db, patient["patient_key"])
+    clinical_notes = await get_patient_clinical_notes(db, patient["patient_key"])
 
     return templates.TemplateResponse(
         "patient_detail.html",
@@ -69,5 +71,6 @@ async def patient_detail(
             "vitals": vitals,
             "allergies": allergies,
             "medications": medications,
+            "clinical_notes": clinical_notes,
         }
     )

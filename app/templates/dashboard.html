@@ -29,7 +29,10 @@
                 <th>Patient Name</th>
                 <th>ICN</th>
                 <th>DOB</th>
+                <th>Age</th>
+                <th>Sex</th>
                 <th>SSN (Last 4)</th>
+                <th>Station</th>
                 <th>Actions</th>
             </tr>
         </thead>
@@ -39,7 +42,10 @@
                 <td class="patient-name">{{ patient.name_display }}</td>
                 <td>{{ patient.icn }}</td>
                 <td>{{ patient.dob }}</td>
+                <td>{{ patient.age }}</td>
+                <td>{{ patient.sex }}</td>
                 <td>{{ patient.ssn_last4 }}</td>
+                <td>{{ patient.primary_station }}</td>
                 <td>
                     <div class="actions-cell">
                         <a href="/patient/{{ patient.icn }}" class="btn btn-sm">View</a>

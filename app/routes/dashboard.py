@@ -49,7 +49,10 @@ async def dashboard(
                 icn,
                 name_display,
                 dob,
-                ssn_last4
+                age,
+                sex,
+                ssn_last4,
+                primary_station
             FROM clinical.patient_demographics
             ORDER BY name_last, name_first
             LIMIT 50
@@ -61,8 +64,11 @@ async def dashboard(
             "patient_key": row[0],
             "icn": row[1],
             "name_display": row[2],
-            "dob": row[3].strftime("%Y-%m-%d") if row[3] else "N/A",
-            "ssn_last4": row[4] or "N/A",
+            "dob": row[3].strftime("%Y-%m-%d") if row[3] else "—",
+            "age": row[4] if row[4] is not None else "—",
+            "sex": row[5] or "—",
+            "ssn_last4": row[6] or "—",
+            "primary_station": row[7] or "—",
             "is_selected": row[1] == current_patient_icn  # Highlight current context patient
         }
         for row in result.fetchall()
