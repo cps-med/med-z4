@@ -1,0 +1,38 @@
+<!-- CCOW Active Patients Monitor -->
+<div class="monitoring-result-container">
+    <div class="monitoring-result-header">
+        <h4>CCOW Active Patients</h4>
+        <div class="monitoring-summary">
+            <span class="summary-item">
+                <strong>Total Contexts:</strong> {{ total_count }}
+            </span>
+        </div>
+    </div>
+
+    {% if contexts %}
+    <table class="monitoring-table">
+        <thead>
+            <tr>
+                <th>User Email</th>
+                <th>Patient ID</th>
+                <th>Set By</th>
+                <th>Set At</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for context in contexts %}
+            <tr>
+                <td>{{ context.email }}</td>
+                <td class="mono-text">{{ context.patient_id }}</td>
+                <td>{{ context.set_by }}</td>
+                <td>{{ context.set_at }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="info-msg">
+        No active patient contexts found.
+    </div>
+    {% endif %}
+</div>

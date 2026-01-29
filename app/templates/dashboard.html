@@ -60,22 +60,71 @@
 <div class="dashboard-footer">
     <p>Showing {{ patients|length }} patients</p>
 
-    <div class="health-checks">
-        <button hx-get="/health/ccow"
-                hx-target="#health-results"
-                hx-swap="innerHTML"
-                class="btn-sm">
-            Check CCOW
-        </button>
+    <!-- System Health & Monitoring Panel -->
+    <div class="monitoring-panel">
+        <div class="monitoring-section">
+            <h3 class="monitoring-header">System Health</h3>
+            <div class="monitoring-buttons">
+                <button hx-get="/health/ccow"
+                        hx-target="#monitoring-results"
+                        hx-swap="innerHTML"
+                        class="btn-sm">
+                    Check CCOW
+                </button>
 
-        <button hx-get="/health/vista"
-                hx-target="#health-results"
-                hx-swap="innerHTML"
-                class="btn-sm">
-            Check VistA
-        </button>
+                <button hx-get="/health/vista"
+                        hx-target="#monitoring-results"
+                        hx-swap="innerHTML"
+                        class="btn-sm">
+                    Check VistA
+                </button>
 
-        <div id="health-results"></div>
+                <button hx-get="/monitoring/database"
+                        hx-target="#monitoring-results"
+                        hx-swap="innerHTML"
+                        class="btn-sm">
+                    Check Database
+                </button>
+
+                <button hx-get="/monitoring/medz1"
+                        hx-target="#monitoring-results"
+                        hx-swap="innerHTML"
+                        class="btn-sm">
+                    Check med-z1
+                </button>
+            </div>
+        </div>
+
+        <div class="monitoring-section">
+            <h3 class="monitoring-header">Active Monitoring</h3>
+            <div class="monitoring-buttons">
+                <button hx-get="/monitoring/sessions"
+                        hx-target="#monitoring-results"
+                        hx-swap="innerHTML"
+                        class="btn-sm">
+                    Show Sessions
+                </button>
+
+                <button hx-get="/monitoring/ccow-patients"
+                        hx-target="#monitoring-results"
+                        hx-swap="innerHTML"
+                        class="btn-sm">
+                    CCOW Active Patients
+                </button>
+
+                <button hx-get="/monitoring/ccow-history"
+                        hx-target="#monitoring-results"
+                        hx-swap="innerHTML"
+                        class="btn-sm">
+                    CCOW History
+                </button>
+            </div>
+        </div>
+
+        <!-- Results Area -->
+        <div id="monitoring-results" class="monitoring-results">
+            <!-- Results from button clicks appear here -->
+        </div>
     </div>
 </div>
 {% endblock %}

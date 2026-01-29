@@ -1,0 +1,45 @@
+<!-- Active Sessions Monitor -->
+<div class="monitoring-result-container">
+    <div class="monitoring-result-header">
+        <h4>Active Sessions</h4>
+        <div class="monitoring-summary">
+            <span class="summary-item">
+                <strong>Unique Users:</strong> {{ summary.unique_users }}
+            </span>
+            <span class="summary-item">
+                <strong>Total Sessions:</strong> {{ summary.total_sessions }}
+            </span>
+        </div>
+    </div>
+
+    {% if sessions %}
+    <table class="monitoring-table">
+        <thead>
+            <tr>
+                <th>Session ID</th>
+                <th>User</th>
+                <th>Email</th>
+                <th>Created</th>
+                <th>Expires</th>
+                <th>IP Address</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for session in sessions %}
+            <tr>
+                <td class="mono-text">{{ session.session_id }}</td>
+                <td>{{ session.display_name }}</td>
+                <td>{{ session.email }}</td>
+                <td>{{ session.created_ago }}</td>
+                <td>{{ session.expires_in }}</td>
+                <td class="mono-text">{{ session.ip_address }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="info-msg">
+        No active sessions found.
+    </div>
+    {% endif %}
+</div>
