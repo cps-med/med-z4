@@ -7,7 +7,11 @@
     <link rel="stylesheet" href="/static/css/style.css">
     <!-- <link rel="icon" href="/static/image/favicon-msu.ico"> -->
     <link rel="icon" href="/static/image/favicon-emoji.ico">
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script>
+        // Configure HTMX to include credentials (cookies) with all requests
+        htmx.config.withCredentials = true;
+    </script>
 </head>
 <body>
     <!-- Navigation Header -->
@@ -29,5 +33,83 @@
     <main class="container">
         {% block content %}{% endblock %}
     </main>
+
+    <!-- Modal container for CRUD forms -->
+    <div id="modal-container"></div>
+
+    <!-- Toast container for notifications -->
+    <div id="toast-container"></div>
+
+    <!-- Phase H.1: CRUD JavaScript Functions -->
+    <script>
+        // Close modal dialog
+        function closeModal() {
+            const modalContainer = document.getElementById('modal-container');
+            if (modalContainer) {
+                modalContainer.innerHTML = '';
+            }
+        }
+
+        // Show toast notification
+        function showToast(message, type = 'success') {
+            const toastContainer = document.getElementById('toast-container');
+            if (!toastContainer) return;
+
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = message;
+
+            toastContainer.appendChild(toast);
+
+            // Auto-dismiss after 3 seconds
+            setTimeout(() => {
+                toast.remove();
+            }, 3000);
+        }
+
+        // Confirm patient deletion
+        function confirmDeletePatient(icn, name) {
+            if (confirm(`Are you sure you want to delete patient ${name} (${icn})?\n\nThis action cannot be undone.`)) {
+                // Use HTMX to send DELETE request
+                htmx.ajax('DELETE', `/patient/${icn}`, {
+                    target: '#modal-container',
+                    swap: 'innerHTML'
+                });
+            }
+        }
+
+        // Listen for toast messages in HTMX responses
+        document.body.addEventListener('htmx:afterSwap', function(event) {
+            // Check if response contains toast element
+            const toast = event.detail.target.querySelector('.toast');
+            if (toast) {
+                // Move toast to toast container
+                const toastContainer = document.getElementById('toast-container');
+                if (toastContainer) {
+                    toastContainer.appendChild(toast);
+
+                    // Auto-dismiss after 3 seconds
+                    setTimeout(() => {
+                        toast.remove();
+                    }, 3000);
+                }
+            }
+
+            // Auto-focus first input field when modal opens
+            if (event.detail.target.id === 'modal-container') {
+                const firstInput = event.detail.target.querySelector('input:not([readonly]), select, textarea');
+                if (firstInput) {
+                    setTimeout(() => firstInput.focus(), 100);
+                }
+            }
+        });
+
+        // Close modal when pressing Escape key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                closeModal();
+            }
+        });
+    </script>
 </body>
 </html>

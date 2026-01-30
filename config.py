@@ -13,8 +13,9 @@ class AppSettings(BaseSettings):
     version: str = "0.1.0 (config.py)"
     port: int = 8005
     debug: bool = True
+    log_level: str = "INFO"  # Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
 
-    # Pydantic will look for APP_NAME, APP_VERSION, etc.
+    # Pydantic will look for APP_NAME, APP_VERSION, APP_LOG_LEVEL, etc.
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix='APP_',
@@ -140,17 +141,3 @@ class Settings(BaseSettings):
 
 # Instantiate the settings once to be imported elsewhere
 settings = Settings()
-
-
-# **** OLD CONFIG INFO BELOW (not sure if still needed) ****
-
-# # SQLAlchemy async connection string
-# DATABASE_URL = f"postgresql+asyncpg://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-
-# Security Configuration
-# ---------------------------------------------------------------------
-# BCRYPT_ROUNDS = int(os.getenv("BCRYPT_ROUNDS", "12"))
-
-# Logging Configuration
-# ---------------------------------------------------------------------
-# LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

@@ -1,7 +1,7 @@
 # med-z1 PostgreSQL Serving Database Reference
 
-**Document Version:** v1.2
-**Last Updated:** 2026-01-28
+**Document Version:** v1.4
+**Last Updated:** 2026-01-29
 **Database:** `medz1`
 **PostgreSQL Version:** 16+
 
@@ -51,6 +51,28 @@ The **med-z1 serving database**, `medz1`, is a PostgreSQL database that serves a
 - **Schema Organization:** Tables organized by functional domain (`clinical`, `auth`, `reference`, `public`)
 - **Index Strategy:** Patient-centric indexes optimized for dashboard and detail page queries
 - **Data Freshness:** T-1 and earlier (historical data); complemented by VistA RPC Broker for T-0 (real-time)
+
+### Schema Evolution: DDL vs. Runtime Types
+
+**Important:** This guide documents the **actual runtime schema** as it exists in PostgreSQL after ETL load processes. There are intentional differences between the DDL scripts (`db/ddl/*.sql`) and the runtime schema:
+
+| DDL Script Defines | Runtime Database Has | Reason |
+|--------------------|---------------------|--------|
+| `VARCHAR(n)` | `TEXT` | Parquet files loaded into PostgreSQL default to `TEXT` type |
+| `DATE` | `TIMESTAMP WITHOUT TIME ZONE` | Polars/Parquet datetime types map to PostgreSQL `TIMESTAMP` |
+| `DECIMAL(n,m)` | `TEXT` (some cases) | Source data may be stored as text in CDW |
+
+**Why Document Runtime Schema?**
+- Developers query the **actual database**, not the intended DDL
+- Application code (`app/db/*.py`) must match runtime types
+- External applications (med-z4, CCOW testing apps) need accurate column types
+
+**DDL Scripts Still Useful For:**
+- Understanding intended design and constraints
+- Documenting column purposes and relationships
+- Reference when creating new tables or fixing type mismatches
+
+**Future Consideration:** Align DDL scripts with actual ETL output or enforce DDL types during ETL load (see `docs/spec/med-z1-architecture.md` for schema management philosophy).
 
 ---
 
@@ -291,36 +313,43 @@ The `clinical` schema contains patient-centric clinical data tables. All tables 
 
 #### Columns
 
+**Note:** This table documents the actual runtime schema in PostgreSQL. The DDL script (`db/ddl/patient_demographics.sql`) defines `VARCHAR(n)` types, but the ETL load process creates `TEXT` columns. Similarly, `dob` is defined as `DATE` in DDL but loaded as `TIMESTAMP WITHOUT TIME ZONE` from Parquet files.
+
 | Column Name | Data Type | Nullable | Description | Example Values |
 |-------------|-----------|----------|-------------|----------------|
-| `patient_key` | VARCHAR(50) | NOT NULL | Internal unique identifier (currently same as ICN) | `"ICN100001"` |
-| `icn` | VARCHAR(50) | NOT NULL | Integrated Care Number - primary VA patient identifier | `"ICN100001"` |
-| `ssn` | VARCHAR(64) | NULL | Encrypted or hashed SSN (production) | `"123-45-6789"` |
-| `ssn_last4` | VARCHAR(4) | NULL | Last 4 digits of SSN for display/verification | `"6789"` |
-| `name_last` | VARCHAR(100) | NULL | Patient last name | `"DOOREE"` |
-| `name_first` | VARCHAR(100) | NULL | Patient first name | `"ADAM"` |
-| `name_display` | VARCHAR(200) | NULL | Formatted name for UI display (LAST, First) | `"DOOREE, ADAM"` |
-| `dob` | DATE | NULL | Date of birth | `"1956-03-15"` |
+| `patient_key` | TEXT | NOT NULL | Internal unique identifier (currently same as ICN) | `"ICN100001"` |
+| `patient_sid` | BIGINT | NULL | Source PatientSID from CDWWork (for debugging/joins) | `123456789` |
+| `icn` | TEXT | NOT NULL | Integrated Care Number - primary VA patient identifier | `"ICN100001"` |
+| `ssn` | TEXT | NULL | Encrypted or hashed SSN (production) | `"123-45-6789"` |
+| `ssn_last4` | TEXT | NULL | Last 4 digits of SSN for display/verification | `"6789"` |
+| `name_last` | TEXT | NULL | Patient last name | `"DOOREE"` |
+| `name_first` | TEXT | NULL | Patient first name | `"ADAM"` |
+| `name_display` | TEXT | NULL | Formatted name for UI display (LAST, First) | `"DOOREE, ADAM"` |
+| `dob` | TIMESTAMP | NULL | Date of birth (timestamp in database, but only date portion used) | `"1956-03-15 00:00:00"` |
 | `age` | INTEGER | NULL | Current age calculated from DOB | `68` |
-| `sex` | VARCHAR(1) | NULL | Biological sex | `"M"`, `"F"` |
-| `gender` | VARCHAR(50) | NULL | Gender identity | `"Male"`, `"Female"`, `"Non-binary"` |
-| `primary_station` | VARCHAR(10) | NULL | Primary VA station (Sta3n) | `"508"`, `"200"` |
-| `primary_station_name` | VARCHAR(200) | NULL | Primary station name | `"Atlanta VA Medical Center"` |
-| `address_street1` | VARCHAR(100) | NULL | Primary address street line 1 | `"123 Main St"` |
-| `address_street2` | VARCHAR(100) | NULL | Primary address street line 2 | `"Apt 4B"` |
-| `address_city` | VARCHAR(100) | NULL | Primary address city | `"Atlanta"` |
-| `address_state` | VARCHAR(2) | NULL | Primary address state abbreviation | `"GA"`, `"CA"` |
-| `address_zip` | VARCHAR(10) | NULL | Primary address ZIP code | `"30303"`, `"30303-1234"` |
-| `phone_primary` | VARCHAR(20) | NULL | Primary phone number | `"404-555-1234"` |
-| `insurance_company_name` | VARCHAR(100) | NULL | Primary insurance company name | `"Blue Cross Blue Shield"` |
-| `marital_status` | VARCHAR(25) | NULL | Marital status | `"Married"`, `"Single"`, `"Divorced"`, `"Widowed"` |
-| `religion` | VARCHAR(50) | NULL | Religion for spiritual care coordination | `"Catholic"`, `"Baptist"` |
-| `service_connected_percent` | DECIMAL(5,2) | NULL | Service connected disability percentage (0-100) | `70.00`, `100.00` |
-| `deceased_flag` | CHAR(1) | NULL | Deceased flag | `"Y"`, `"N"` |
-| `death_date` | DATE | NULL | Date of death (if deceased) | `"2023-05-20"` |
-| `veteran_status` | VARCHAR(50) | NULL | Veteran status | `"Veteran"` |
-| `source_system` | VARCHAR(20) | NULL | Data source system (see [Data Source System Field Values](#data-source-system-field-values)) | `"CDWWork"` |
-| `last_updated` | TIMESTAMP | NULL | Record last updated timestamp | `"2025-12-10 14:23:45"` |
+| `sex` | TEXT | NULL | Biological sex | `"M"`, `"F"` |
+| `primary_station` | TEXT | NULL | Primary VA station (Sta3n) | `"508"`, `"200"` |
+| `primary_station_name` | TEXT | NULL | Primary station name | `"Atlanta VA Medical Center"` |
+| `address_street1` | TEXT | NULL | Primary address street line 1 | `"123 Main St"` |
+| `address_street2` | TEXT | NULL | Primary address street line 2 | `"Apt 4B"` |
+| `address_city` | TEXT | NULL | Primary address city | `"Atlanta"` |
+| `address_state` | TEXT | NULL | Primary address state abbreviation | `"GA"`, `"CA"` |
+| `address_zip` | TEXT | NULL | Primary address ZIP code | `"30303"`, `"30303-1234"` |
+| `phone_primary` | TEXT | NULL | Primary phone number | `"404-555-1234"` |
+| `insurance_company_name` | TEXT | NULL | Primary insurance company name | `"Blue Cross Blue Shield"` |
+| `marital_status` | TEXT | NULL | Marital status | `"Married"`, `"Single"`, `"Divorced"`, `"Widowed"` |
+| `religion` | TEXT | NULL | Religion for spiritual care coordination | `"Catholic"`, `"Baptist"` |
+| `service_connected_percent` | TEXT | NULL | Service connected disability percentage (0-100) | `"70.00"`, `"100.00"` |
+| `deceased_flag` | TEXT | NULL | Deceased flag | `"Y"`, `"N"` |
+| `death_date` | TIMESTAMP | NULL | Date of death (timestamp in database, but only date portion used) | `"2023-05-20 00:00:00"` |
+| `source_system` | TEXT | NULL | Data source system (see [Data Source System Field Values](#data-source-system-field-values)) | `"CDWWork"`, `"med-z4"` |
+| `last_updated` | TIMESTAMP WITH TIME ZONE | NULL | Record last updated timestamp | `"2025-12-10 14:23:45+00"` |
+
+**⚠️ Columns Defined in DDL but NOT in Current Database:**
+- `gender` (VARCHAR(50)) - Defined in `db/ddl/patient_demographics.sql` line 33 but not included in ETL (`etl/gold_patient.py`)
+- `veteran_status` (VARCHAR(50)) - Defined in `db/ddl/patient_demographics.sql` line 62 but not included in ETL (`etl/gold_patient.py`)
+
+**Rationale:** These columns are planned for future implementation but are not yet populated from source CDW data.
 
 #### Indexes
 
@@ -1472,6 +1501,20 @@ ORDER BY immunization_count DESC;
 
 ## Data Volume Estimates
 
+**Context:** This section provides **production-scale estimates** for capacity planning. Current development database (as of 2026-01-29) contains 36 patients with mock synthetic data.
+
+### Development Environment (Current)
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| **Total Patients** | 36 | Mock synthetic data (ICN100001-ICN100036) |
+| **Total Database Size** | ~50-100 MB | Including indexes and AI checkpoints |
+| **Purpose** | Development, testing, feature validation | Safe for public repositories (no PHI/PII) |
+
+### Production Projections
+
+The estimates below are for **production-scale deployment** with real patient data:
+
 ### Typical Row Counts (Per Patient)
 
 | Table | Typical Rows/Patient | Notes |
@@ -1565,6 +1608,7 @@ When building a simple EHR web app to test the med-z1 CCOW service:
 | v1.1 | 2026-01-22 | Claude Code | Corrected AI checkpoint tables: schema=`public` (not `ai`), 4 tables (not 2), auto-created by LangGraph |
 | v1.2 | 2026-01-28 | Claude Code | Added comprehensive "Data Source System Field Values" section documenting CDWWork, CDWWork2, and CALCULATED values; clarified that VistA real-time data uses "CDWWork" label |
 | v1.3 | 2026-01-28 | Claude Code | Added `med-z4` as 4th data source value for user-entered data; updated usage notes for Phase H CRUD implementation |
+| v1.4 | 2026-01-29 | Claude Code | **Major accuracy update:** Corrected `patient_demographics` to reflect actual runtime schema (TEXT vs VARCHAR, TIMESTAMP vs DATE); added `patient_sid` column; removed non-existent `gender` and `veteran_status` columns; added "Schema Evolution: DDL vs Runtime Types" section; added development vs production data volume context (36 patients current) |
 
 ---
 

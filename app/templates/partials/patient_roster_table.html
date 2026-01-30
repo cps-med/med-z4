@@ -1,0 +1,34 @@
+<div class="patient-roster-card">
+    <table class="patient-table">
+        <thead>
+            <tr>
+                <th>Patient Name</th>
+                <th>ICN</th>
+                <th>DOB</th>
+                <th>Age</th>
+                <th>Sex</th>
+                <th>SSN (Last 4)</th>
+                <th>Station</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for patient in patients %}
+                <tr class="{% if active_patient_icn == patient.icn %}patient-selected{% endif %}">
+                <td class="patient-name">{{ patient.name_display }}</td>
+                <td>{{ patient.icn }}</td>
+                <td>{{ patient.dob.strftime('%Y-%m-%d') if patient.dob else 'Unknown' }}</td>
+                <td>{{ patient.age if patient.age is not none else '—' }}</td>
+                <td>{{ patient.sex or '—' }}</td>
+                <td>{{ patient.ssn_last4 or '—' }}</td>
+                <td>{{ patient.primary_station or '—' }}</td>
+                <td>
+                    <div class="actions-cell">
+                        <a href="/patient/{{ patient.icn }}" class="btn btn-sm">View</a>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>

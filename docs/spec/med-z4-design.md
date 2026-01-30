@@ -6628,6 +6628,107 @@ After making these changes:
 
 ---
 
+## 10.5 Phase H.1: Patient Demographics CRUD
+
+**Implementation Date:** TBD (Ready for Implementation)
+**Implementation Guide:** `docs/spec/phase-h1-patient-demographics-crud.md`
+
+**Goal:** Add Create, Read, Update, Delete (CRUD) capabilities for patient demographics with modal dialog forms, toast notifications, and auto-generated ICN assignment.
+
+### Overview
+
+Phase H.1 introduces full CRUD operations for patient demographics, allowing users to:
+- **Create** new patients from dashboard via "Add New Patient" button
+- **Edit** existing patient demographics from patient detail page
+- **Delete** patients with confirmation dialog
+- View immediate feedback via toast notifications
+
+**Key Features:**
+- Modal dialog-based forms (no page navigation)
+- All demographics fields editable (26 fields total)
+- Client-side (HTML5) and server-side (Python) validation
+- Custom toast notifications (3-second auto-dismiss)
+- HTMX-powered dynamic updates (no full page reloads)
+- Hard delete with JavaScript confirmation
+- Auto-generated ICN for new patients (999 series)
+
+### Implementation Scope
+
+**New Files Created:**
+- `app/services/patient_crud_service.py` - CRUD business logic (428 lines)
+- `app/routes/patient_crud.py` - HTTP route handlers (304 lines)
+- `app/templates/partials/patient_roster_table.html` - Refreshable roster table
+- `app/templates/partials/patient_create_form.html` - Create patient modal form (243 lines)
+- `app/templates/partials/patient_edit_form.html` - Edit patient modal form (254 lines)
+
+**Files Modified:**
+- `app/main.py` - Register patient_crud router
+- `app/templates/dashboard.html` - Add "Add New Patient" button, modal/toast containers
+- `app/templates/patient_detail.html` - Add "Edit Patient" and "Delete Patient" buttons
+- `app/templates/base.html` - Add JavaScript functions for modals and toasts
+- `app/static/css/style.css` - Add ~200 lines of CSS for modals, toasts, forms
+
+### Architecture Patterns
+
+**Modal Dialog Pattern:**
+- Server-rendered forms loaded via HTMX
+- Overlay dialogs with backdrop
+- Close on success, stay open on validation errors
+- Escape key to close
+
+**Toast Notification Pattern:**
+- Custom CSS + JavaScript (no external library)
+- Position: Top of content area, below CCOW banner
+- Duration: 3 seconds auto-dismiss
+- Types: Success (green), Error (red)
+
+**HTMX Refresh Pattern:**
+- Dashboard: Refresh roster table via hidden trigger button
+- Patient Detail: Full page reload to show updated data
+
+**CCOW Integration:**
+- Create patient (Dashboard): No context change (user creating, not viewing)
+- Edit patient (Detail Page): Context already correct
+- Delete patient: Context cleared if deleted patient was active
+
+### ICN Auto-Generation
+
+New patients created by med-z4 receive auto-generated ICNs in the **999 series**:
+- Format: `ICN999001`, `ICN999002`, `ICN999003`, etc.
+- Sequential assignment (finds MAX, increments by 1)
+- Clearly identifies med-z4-created test patients
+- Prevents collision with CDWWork historical patients (100xxx series)
+
+### Validation Rules
+
+**Required Fields:** name_last, name_first, dob, sex
+**Format Validation:** SSN (###-##-####), Phone (###-###-####), ZIP (##### or #####-####)
+**Range Validation:** DOB (must be in past, age 0-150), Death date (after DOB, not in future)
+**Business Rules:** SSN last 4 matches full SSN, deceased flag consistency
+
+### Complete Implementation Guide
+
+For detailed step-by-step instructions, copy/paste-ready code, learning sections, and verification steps, see:
+
+**`docs/spec/phase-h1-patient-demographics-crud.md`**
+
+This document contains:
+- Detailed architecture patterns explanation
+- Learning sections on modals, ICN generation, validation
+- 9 implementation steps with complete code
+- 10 verification test cases
+- Troubleshooting guide
+
+### Future Phases
+
+After Phase H.1 is complete and tested:
+- **Phase H.2:** Vitals CRUD (following same pattern)
+- **Phase H.3:** Allergies CRUD
+- **Phase H.4:** Medications CRUD
+- **Phase H.5:** Clinical Notes CRUD
+
+---
+
 ## 10.10 Quick Start Summary (Reference)
 
 **Note:** This section provides a quick validation sequence for greenfield development. If following the refactoring roadmap (Sections 10.0-10.1), you can skip this section.

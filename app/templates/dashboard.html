@@ -18,12 +18,19 @@
      hx-swap="outerHTML">
 </div>
 
-<div class="dashboard-header">
+<div class="section-header-with-action">
     <h2>Patient Roster</h2>
+    <button hx-get="/patient/create-form"
+            hx-target="#modal-container"
+            hx-swap="innerHTML"
+            class="btn btn-primary btn-sm">
+        Add New Patient
+    </button>
 </div>
 
-<div class="patient-roster-card">
-    <table class="patient-table">
+<div id="roster-table-container">
+    <div class="patient-roster-card">
+        <table class="patient-table">
         <thead>
             <tr>
                 <th>Patient Name</th>
@@ -54,11 +61,20 @@
             </tr>
             {% endfor %}
         </tbody>
-    </table>
+        </table>
+    </div>
 </div>
 
 <div class="dashboard-footer">
     <p>Showing {{ patients|length }} patients</p>
+
+    <!-- Hidden button for HTMX to refresh roster table -->
+    <button id="roster-refresh-trigger"
+            hx-get="/patient/roster-table"
+            hx-target="#roster-table-container"
+            hx-swap="innerHTML"
+            style="display: none;">
+    </button>
 
     <!-- System Health & Monitoring Panel -->
     <div class="monitoring-panel">

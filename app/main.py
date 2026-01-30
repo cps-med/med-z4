@@ -17,17 +17,35 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+import logging
 
 # Routes
-from app.routes import auth, admin, health, dashboard, patient, monitoring
+from app.routes import auth, admin, health, dashboard, patient, monitoring, patient_crud
 
 # Import 'settings' object from root-level config file
 from config import settings
+
+# -----------------------------------------------------------------
+# Configure Python Logging
+# -----------------------------------------------------------------
+# This configures the root logger to use the level specified in settings.
+# Application loggers (e.g., in services, routes) will inherit this level.
+# Control via APP_LOG_LEVEL in .env: DEBUG, INFO, WARNING, ERROR, CRITICAL
+#
+# Format includes timestamp, level, logger name, and message.
+# SQLAlchemy and uvicorn have their own formatters and will appear differently.
+# -----------------------------------------------------------------
+logging.basicConfig(
+    level=settings.app.log_level.upper(),
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 print()
 print(f"       Application Name: {settings.app.name}")
 print(f"    Application Version: {settings.app.version}")
 print(f"      Application Debug: {settings.app.debug}")
+print(f"    Application Log Level: {settings.app.log_level}")
 print(f"         Sample API URL: {settings.sample.api_url}")
 print(f"Session Timeout Minutes: {settings.session.timeout_minutes}")
 print(f"    Session Cookie Name: {settings.session.cookie_name}")
@@ -53,6 +71,7 @@ app.include_router(auth.router, tags=["auth"])
 app.include_router(dashboard.router, tags=["dashboard"])
 app.include_router(admin.router, tags=["admin"])
 app.include_router(health.router, tags=["health"])
+app.include_router(patient_crud.router, tags=["patient-crud"])  # Register before patient.router to avoid route conflicts
 app.include_router(patient.router, tags=["patient"])
 app.include_router(monitoring.router, tags=["monitoring"])
 

@@ -220,10 +220,6 @@ med-z4 acts as both a **context participant** (follows context changes) and **co
 - No local context tracking table - CCOW Vault maintains context per-user in-memory
 - Logout: CCOW context is preserved (recommended approach)
 
-**Reference Documentation:**
-- `docs/reference/med-z4-integration-quickstart.md` - 30-minute integration guide
-- `docs/reference/ccow-v2.1-testing-guide.md` - Testing with curl/Insomnia
-- `docs/reference/timezone-and-session-management.md` - Session handling patterns
 
 ### HTMX Integration
 
@@ -263,26 +259,6 @@ The design document (`docs/spec/med-z4-design.md`) defines implementation phases
 - Gray color palette and `.btn-outline` button variant
 - Bidirectional context synchronization with med-z1 verified
 
-### Completed Phases
-
-**Phase E: Real Authentication** (Section 10.1) ✅
-- SQLAlchemy models: User, Session, AuditLog
-- Authentication service with bcrypt password hashing
-- Session validation and expiration handling
-- Account locking after failed login attempts
-- Audit logging for security events
-
-**Phase F: CCOW Integration** (Section 10.2) ✅
-- CCOW service with v2.1 API (`get_active_patient`, `set_active_patient`, `clear_active_patient`)
-- X-Session-ID header authentication pattern
-- Dashboard displays current CCOW context on load
-- CCOW banner with active/inactive states (`partials/ccow_banner.html`)
-- HTMX polling endpoint (`/context/banner`) with 5-second refresh
-- Patient selection endpoint (`/patient/select/{icn}`) for setting context
-- Context clear endpoint (`/context/clear`) with "Clear" button in banner
-- Patient row highlighting (`.patient-selected` CSS class)
-- Bidirectional context synchronization with med-z1 verified
-
 **Phase G: Patient Detail Page** (Section 10.3) ✅
 - Patient service layer (`app/services/patient_service.py`) with data-fetching functions
 - Patient detail route (`/patient/{icn}`) with automatic CCOW context setting
@@ -295,18 +271,46 @@ The design document (`docs/spec/med-z4-design.md`) defines implementation phases
 - "← Back to Roster" navigation link
 - Placeholder "+ Add" buttons (disabled) for Phase H CRUD operations
 
+**Monitoring Dashboard** (`docs/spec/med-z4-monitoring-dashboard.md`) ✅
+- Monitoring service layer (`app/services/monitoring_service.py`) with health check functions
+- Monitoring routes (`app/routes/monitoring.py`) for system health and active monitoring
+- Active Sessions monitor - Real-time view of logged-in users and session details
+- Database Health Check - PostgreSQL connectivity and statistics
+- med-z1 Health Check - Companion application availability
+- CCOW Active Patients - System-wide patient context monitoring
+- CCOW Context History - Audit trail of recent context changes
+- Dashboard monitoring panel with two-tiered button layout
+- HTML partials for monitoring tables (sessions, CCOW patients, CCOW history)
+- CSS styling for monitoring panel, tables, and status messages
+
 ### In Progress
 
-None - All planned phases through Phase G are complete.
+None - All planned phases through Phase G and the monitoring dashboard are complete.
 
 ### Planned Phases
 
-**Phase H: Patient CRUD** (Coming Soon)
-- Create/edit patient data
-- Form validation and error handling
-- Implement functionality for "+ Add" buttons from Phase G
+**Phase H: Patient and Clinical CRUD**
 
-**Current Status:** Phase E, Phase F, and Phase G complete and deployed. Ready to begin Phase H (Patient CRUD).
+Phase H is split into multiple sub-phases, each documented in separate specification files:
+
+**Phase H.1: Patient Demographics CRUD** (`docs/spec/phase-h1-patient-demographics-crud.md`) - Ready for Implementation
+- Create/edit/delete patient demographics from dashboard and detail page
+- Modal dialog forms with full field coverage (26 fields)
+- Client-side (HTML5) and server-side (Python) validation
+- Custom toast notifications (3-second auto-dismiss)
+- Auto-generated ICN assignment (999 series)
+- HTMX-powered dynamic table refresh
+
+**Phase H.2: Vitals CRUD** (Planned after H.1 completion)
+- Create/edit/delete vital signs from patient detail page
+- Following same modal/toast/validation patterns as H.1
+- Will be documented in `docs/spec/phase-h2-vitals-crud.md`
+
+**Phase H.3-H.5: Additional Clinical CRUD** (Planned after H.2)
+- Allergies, Medications, Clinical Notes
+- Following established patterns from H.1 and H.2
+
+**Current Status:** Phases A-G complete and deployed. Monitoring dashboard implementation complete. Phase H.1 specification complete and ready for implementation.
 
 ## Authentication Patterns
 
@@ -442,17 +446,13 @@ curl -X DELETE \
 ## Reference Documentation
 
 - **Design Specification:** `docs/spec/med-z4-design.md` - Complete technical design with implementation roadmap (Phases A-H)
+- **Monitoring Dashboard Specification:** `docs/spec/med-z4-monitoring-dashboard.md` - System health and monitoring dashboard implementation guide
+- **Phase H.1 Implementation Guide:** `docs/spec/phase-h1-patient-demographics-crud.md` - Complete implementation guide for patient demographics CRUD operations with modal dialogs, toast notifications, and auto-generated ICN
 - **Database Guide:** `docs/guide/med-z1-postgres-guide.md` - Comprehensive schema documentation for shared medz1 database with data source field values
 - **README:** Basic project overview and database connection info
 - **Section 10.1:** Phase E (Real Authentication) - Step-by-step authentication implementation
 - **Section 10.2:** Phase F (CCOW Integration) - CCOW v2.1 bidirectional context guide
 - **Section 10.3:** Phase G (Patient Detail Page) - Patient detail view implementation
-
-**CCOW v2.1 Reference Documentation:**
-- `docs/reference/med-z4-integration-quickstart.md` - 30-minute integration guide
-- `docs/reference/ccow-v2.1-testing-guide.md` - Testing with curl/Insomnia
-- `docs/reference/ccow-multi-user-enhancement.md` - CCOW v2.0 multi-user design
-- `docs/reference/timezone-and-session-management.md` - Session handling patterns
 
 ## Troubleshooting
 

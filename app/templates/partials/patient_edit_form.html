@@ -1,0 +1,300 @@
+<div class="modal-backdrop" onclick="closeModal()">
+    <div class="modal-dialog" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h3>Edit Patient: {{ patient.name_display }} ({{ patient.icn }})</h3>
+            <button onclick="closeModal()" class="btn-close">&times;</button>
+        </div>
+
+        <form hx-post="/patient/{{ patient.icn }}/update"
+              hx-target="#modal-container"
+              hx-swap="innerHTML"
+              hx-disabled-elt="find button[type='submit']"
+              class="modal-form">
+
+            <!-- ICN Display (Read-only) -->
+            <fieldset>
+                <legend>Patient Identity</legend>
+                <div class="form-group">
+                    <label>ICN (Read-only)</label>
+                    <input type="text"
+                           value="{{ patient.icn }}"
+                           readonly
+                           class="readonly-field">
+                    <small>ICN cannot be changed</small>
+                </div>
+            </fieldset>
+
+            <!-- Required Fields -->
+            <fieldset>
+                <legend>Required Information</legend>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="name_last">Last Name *</label>
+                        <input type="text"
+                               id="name_last"
+                               name="name_last"
+                               value="{{ data.name_last if data else patient.name_last }}"
+                               required
+                               maxlength="50">
+                        {% if errors and errors.name_last %}
+                        <span class="error-text">{{ errors.name_last }}</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="form-group">
+                        <label for="name_first">First Name *</label>
+                        <input type="text"
+                               id="name_first"
+                               name="name_first"
+                               value="{{ data.name_first if data else patient.name_first }}"
+                               required
+                               maxlength="50">
+                        {% if errors and errors.name_first %}
+                        <span class="error-text">{{ errors.name_first }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="dob">Date of Birth *</label>
+                        <input type="date"
+                               id="dob"
+                               name="dob"
+                               value="{{ (data.dob if data else patient.dob.strftime('%Y-%m-%d')) if patient.dob else '' }}"
+                               required>
+                        {% if errors and errors.dob %}
+                        <span class="error-text">{{ errors.dob }}</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="form-group">
+                        <label for="sex">Sex *</label>
+                        <select id="sex" name="sex" required>
+                            <option value="">Select...</option>
+                            <option value="M" {% if (data.sex if data else patient.sex) == 'M' %}selected{% endif %}>Male</option>
+                            <option value="F" {% if (data.sex if data else patient.sex) == 'F' %}selected{% endif %}>Female</option>
+                        </select>
+                        {% if errors and errors.sex %}
+                        <span class="error-text">{{ errors.sex }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </fieldset>
+
+            <!-- Identification -->
+            <fieldset>
+                <legend>Identification</legend>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ssn">SSN</label>
+                        <input type="text"
+                               id="ssn"
+                               name="ssn"
+                               value="{{ data.ssn if data else (patient.ssn or '') }}"
+                               placeholder="###-##-####"
+                               pattern="[0-9]{3}-[0-9]{2}-[0-9]{4}"
+                               maxlength="11">
+                        <small>Format: ###-##-####</small>
+                        {% if errors and errors.ssn %}
+                        <span class="error-text">{{ errors.ssn }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </fieldset>
+
+            <!-- Station Information -->
+            <fieldset>
+                <legend>Station</legend>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="primary_station">Primary Station</label>
+                        <input type="text"
+                               id="primary_station"
+                               name="primary_station"
+                               value="{{ data.primary_station if data else (patient.primary_station or '') }}"
+                               maxlength="10">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="primary_station_name">Station Name</label>
+                        <input type="text"
+                               id="primary_station_name"
+                               name="primary_station_name"
+                               value="{{ data.primary_station_name if data else (patient.primary_station_name or '') }}"
+                               maxlength="100">
+                    </div>
+                </div>
+            </fieldset>
+
+            <!-- Address -->
+            <fieldset>
+                <legend>Address</legend>
+
+                <div class="form-group">
+                    <label for="address_street1">Street Address 1</label>
+                    <input type="text"
+                           id="address_street1"
+                           name="address_street1"
+                           value="{{ data.address_street1 if data else (patient.address_street1 or '') }}"
+                           maxlength="100">
+                </div>
+
+                <div class="form-group">
+                    <label for="address_street2">Street Address 2</label>
+                    <input type="text"
+                           id="address_street2"
+                           name="address_street2"
+                           value="{{ data.address_street2 if data else (patient.address_street2 or '') }}"
+                           maxlength="100">
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="address_city">City</label>
+                        <input type="text"
+                               id="address_city"
+                               name="address_city"
+                               value="{{ data.address_city if data else (patient.address_city or '') }}"
+                               maxlength="50">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="address_state">State</label>
+                        <input type="text"
+                               id="address_state"
+                               name="address_state"
+                               value="{{ data.address_state if data else (patient.address_state or '') }}"
+                               maxlength="2"
+                               pattern="[A-Z]{2}">
+                        <small>2-letter code (e.g., GA, CA)</small>
+                        {% if errors and errors.address_state %}
+                        <span class="error-text">{{ errors.address_state }}</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="form-group">
+                        <label for="address_zip">ZIP Code</label>
+                        <input type="text"
+                               id="address_zip"
+                               name="address_zip"
+                               value="{{ data.address_zip if data else (patient.address_zip or '') }}"
+                               maxlength="10">
+                        <small>##### or #####-####</small>
+                        {% if errors and errors.address_zip %}
+                        <span class="error-text">{{ errors.address_zip }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </fieldset>
+
+            <!-- Contact & Insurance -->
+            <fieldset>
+                <legend>Contact & Insurance</legend>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="phone_primary">Phone</label>
+                        <input type="tel"
+                               id="phone_primary"
+                               name="phone_primary"
+                               value="{{ data.phone_primary if data else (patient.phone_primary or '') }}"
+                               pattern="[0-9]{3}-[0-9]{3}-[0-9]{4}"
+                               maxlength="12">
+                        <small>Format: ###-###-####</small>
+                        {% if errors and errors.phone_primary %}
+                        <span class="error-text">{{ errors.phone_primary }}</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="form-group">
+                        <label for="insurance_company_name">Insurance Company</label>
+                        <input type="text"
+                               id="insurance_company_name"
+                               name="insurance_company_name"
+                               value="{{ data.insurance_company_name if data else (patient.insurance_company_name or '') }}"
+                               maxlength="100">
+                    </div>
+                </div>
+            </fieldset>
+
+            <!-- Additional Information -->
+            <fieldset>
+                <legend>Additional Information</legend>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="marital_status">Marital Status</label>
+                        <select id="marital_status" name="marital_status">
+                            <option value="">Select...</option>
+                            <option value="Single" {% if (data.marital_status if data else patient.marital_status) == 'Single' %}selected{% endif %}>Single</option>
+                            <option value="Married" {% if (data.marital_status if data else patient.marital_status) == 'Married' %}selected{% endif %}>Married</option>
+                            <option value="Divorced" {% if (data.marital_status if data else patient.marital_status) == 'Divorced' %}selected{% endif %}>Divorced</option>
+                            <option value="Widowed" {% if (data.marital_status if data else patient.marital_status) == 'Widowed' %}selected{% endif %}>Widowed</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="religion">Religion</label>
+                        <input type="text"
+                               id="religion"
+                               name="religion"
+                               value="{{ data.religion if data else (patient.religion or '') }}"
+                               maxlength="50">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="service_connected_percent">Service Connected %</label>
+                        <input type="number"
+                               id="service_connected_percent"
+                               name="service_connected_percent"
+                               value="{{ data.service_connected_percent if data else (patient.service_connected_percent or '') }}"
+                               min="0"
+                               max="100"
+                               step="10">
+                        {% if errors and errors.service_connected_percent %}
+                        <span class="error-text">{{ errors.service_connected_percent }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </fieldset>
+
+            <!-- Deceased Information -->
+            <fieldset>
+                <legend>Deceased Information (if applicable)</legend>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="deceased_flag">Deceased</label>
+                        <select id="deceased_flag" name="deceased_flag">
+                            <option value="">Select...</option>
+                            <option value="N" {% if (data.deceased_flag if data else patient.deceased_flag) == 'N' %}selected{% endif %}>No</option>
+                            <option value="Y" {% if (data.deceased_flag if data else patient.deceased_flag) == 'Y' %}selected{% endif %}>Yes</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="death_date">Death Date</label>
+                        <input type="date"
+                               id="death_date"
+                               name="death_date"
+                               value="{{ (data.death_date if data else patient.death_date.strftime('%Y-%m-%d')) if patient.death_date else '' }}">
+                        {% if errors and errors.death_date %}
+                        <span class="error-text">{{ errors.death_date }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </fieldset>
+
+            <div class="modal-footer">
+                <button type="button" onclick="closeModal()" class="btn btn-secondary btn-sm">Cancel</button>
+                <button type="submit" class="btn btn-primary btn-sm">Update Patient</button>
+            </div>
+        </form>
+    </div>
+</div>
