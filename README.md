@@ -208,13 +208,16 @@ Test that the application can connect to the PostgreSQL database:
 
 ```bash
 # Quick database connectivity test
+# Note: 'SELECT 1' is a standard SQL health check query that returns the literal value 1
+# It's used to verify database connectivity without requiring any tables to exist
 python -c "
 import asyncio
-from app.database import engine
+from sqlalchemy import text
+from database import engine
 
 async def test_db():
     async with engine.connect() as conn:
-        result = await conn.execute('SELECT 1')
+        result = await conn.execute(text('SELECT 1'))
         print('✅ Database connected successfully!')
 
 asyncio.run(test_db())
